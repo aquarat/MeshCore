@@ -87,7 +87,18 @@ void BLERadio::init() {
 }
 
 void BLERadio::setTxPower(uint8_t dbm) {
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, (esp_power_level_t)dbm);
+  // ESP32 BLE power setting - convert to ESP_PWR_LVL enum values
+  // Power levels: -12, -9, -6, -3, 0, 3, 6, 9 dBm
+  esp_power_level_t power_level = ESP_PWR_LVL_P9;  // Default to max
+  if (dbm <= -12) power_level = ESP_PWR_LVL_N12;
+  else if (dbm <= -9) power_level = ESP_PWR_LVL_N9;
+  else if (dbm <= -6) power_level = ESP_PWR_LVL_N6;
+  else if (dbm <= -3) power_level = ESP_PWR_LVL_N3;
+  else if (dbm <= 0) power_level = ESP_PWR_LVL_N0;
+  else if (dbm <= 3) power_level = ESP_PWR_LVL_P3;
+  else if (dbm <= 6) power_level = ESP_PWR_LVL_P6;
+  
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, power_level);
 }
 
 uint32_t BLERadio::intID() {

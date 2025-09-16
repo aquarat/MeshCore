@@ -76,6 +76,7 @@ author: https://github.com/LitBomb<!-- omit from toc -->
   - [7.4. Q: are the MeshCore logo and font available?](#74-q-are-the-meshcore-logo-and-font-available)
   - [7.5. Q: What is the format of a contact or channel QR code?](#75-q-what-is-the-format-of-a-contact-or-channel-qr-code)
   - [7.6. Q: How do I connect to the comnpanion via WIFI, e.g. using a heltec v3?](#76-q-how-do-i-connect-to-the-comnpanion-via-wifi-eg-using-a-heltec-v3)
+  - [7.7. Q: How does BLE backhaul work for repeaters?](#77-q-how-does-ble-backhaul-work-for-repeaters)
 
 ## 1. Introduction
 
@@ -589,7 +590,9 @@ https://github.com/liamcottle/meshcore.js
 You can get the epoch time on <https://www.epochconverter.com/> and use it to set your T-Deck clock. For a repeater and room server, the admin can use a T-Deck to remotely set their clock (clock sync), or use the `time` command in the USB serial console with the server device connected.
 
 ### 6.3. Q: How to connect to a repeater via BLE (Bluetooth)?
-**A:** You can't connect to a device running repeater firmware  via Bluetooth.  Devices running the BLE companion firmware you can connect to it via Bluetooth using the android app
+**A:** You can't connect to a device running regular repeater firmware via Bluetooth for configuration. Devices running the BLE companion firmware you can connect to it via Bluetooth using the android app.
+
+However, there is now **BLE backhaul repeater firmware** which allows two repeaters to link together via Bluetooth Low Energy. This is useful for scenarios where you have two repeaters with different antennas (e.g., omnidirectional and directional) and want them to work as one unit. The BLE connection acts as a backhaul link - packets received by one repeater are forwarded to the linked repeater via BLE and retransmitted. This is more energy efficient than ESP-NOW for solar-powered installations.
 
 ### 6.4. Q: I can't connect via Bluetooth, what is the Bluetooth pairing code?
 
@@ -698,5 +701,22 @@ where `&type` is:
  **A:** 
 WiFi firmware requires you to compile it yourself, as you need to set the wifi ssid and password.
 Edit WIFI_SSID and WIFI_PWD in `./variants/heltec_v3/platformio.ini` and then flash it to your device.
+
+### 7.7. Q: How does BLE backhaul work for repeaters?
+
+**A:** BLE backhaul allows two repeaters to link together via Bluetooth Low Energy, creating a wireless bridge between them. This is particularly useful when you have:
+
+- Two repeaters with different antenna types (e.g., omnidirectional and highly directional)
+- Solar-powered installations where BLE is more energy efficient than ESP-NOW
+- Locations where physical RS232 connections would create water ingress issues
+
+When using BLE backhaul firmware:
+1. Both repeaters must be flashed with BLE backhaul repeater firmware (`Generic_BLE_Backhaul_repeatr` or `Generic_nRF52_BLE_Backhaul_repeatr`)
+2. The repeaters will automatically discover and connect to each other via BLE
+3. Packets received by one repeater are forwarded to the linked repeater and retransmitted
+4. The system appears as a single logical repeater to the mesh network
+5. BLE connection automatically restarts if devices disconnect
+
+This feature complements existing ESP-NOW and RS232 backhaul options, providing a low-power wireless alternative for linking repeaters.
 
 ---
