@@ -19,6 +19,14 @@
 #include <RTClib.h>
 #include <target.h>
 
+#ifdef BLE_BACKHAUL_RADIO
+  #if defined(ESP32)
+    #include <helpers/esp32/BLERadio.h>
+  #elif defined(NRF52_PLATFORM)
+    #include <helpers/nrf52/BLERadio.h>
+  #endif
+#endif
+
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef FIRMWARE_BUILD_DATE
@@ -592,6 +600,14 @@ public:
     _prefs.flood_advert_interval = 12;   // 12 hours
     _prefs.flood_max = 64;
     _prefs.interference_threshold = 0;  // disabled
+    
+    // BLE backhaul defaults
+    memset(_prefs.ble_target_mac, 0, sizeof(_prefs.ble_target_mac));
+    StrHelper::strncpy(_prefs.ble_service_uuid, "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", sizeof(_prefs.ble_service_uuid));
+    StrHelper::strncpy(_prefs.ble_tx_char_uuid, "6E400003-B5A3-F393-E0A9-E50E24DCCA9E", sizeof(_prefs.ble_tx_char_uuid));
+    StrHelper::strncpy(_prefs.ble_rx_char_uuid, "6E400002-B5A3-F393-E0A9-E50E24DCCA9E", sizeof(_prefs.ble_rx_char_uuid));
+    _prefs.ble_tx_power = 3;  // Default BLE power
+    _prefs.ble_auto_advertising = 0;  // Disabled by default, prefer manual pairing
   }
 
   void begin(FILESYSTEM* fs) {
@@ -602,6 +618,18 @@ public:
 
     radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
     radio_set_tx_power(_prefs.tx_power_dbm);
+
+    // Apply BLE configuration from preferences
+#ifdef BLE_BACKHAUL_RADIO
+    if (strlen(_prefs.ble_target_mac) > 0) {
+      ((BLERadio&)radio_driver).setTargetMAC(_prefs.ble_target_mac);
+    }
+    ((BLERadio&)radio_driver).setServiceUUID(_prefs.ble_service_uuid);
+    ((BLERadio&)radio_driver).setTxCharUUID(_prefs.ble_tx_char_uuid);
+    ((BLERadio&)radio_driver).setRxCharUUID(_prefs.ble_rx_char_uuid);
+    ((BLERadio&)radio_driver).setBLETxPower(_prefs.ble_tx_power);
+    ((BLERadio&)radio_driver).setAutoAdvertising(_prefs.ble_auto_advertising);
+#endif
 
     updateAdvertTimer();
     updateFloodAdvertTimer();
@@ -750,6 +778,63 @@ public:
     radio_driver.resetStats();
     resetStats();
     ((SimpleMeshTables *)getTables())->resetStats();
+  }
+
+  // BLE backhaul callback implementations
+  void setBLETargetMAC(const char* mac_address) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setTargetMAC(mac_address);
+#endif
+  }
+  
+  void setBLEServiceUUID(const char* uuid) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setServiceUUID(uuid);
+#endif
+  }
+  
+  void setBLETxCharUUID(const char* uuid) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setTxCharUUID(uuid);
+#endif
+  }
+  
+  void setBLERxCharUUID(const char* uuid) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setRxCharUUID(uuid);
+#endif
+  }
+  
+  void setBLETxPower(uint8_t power) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setBLETxPower(power);
+#endif
+  }
+  
+  void setBLEAutoAdvertising(bool enable) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).setAutoAdvertising(enable);
+#endif
+  }
+  
+  void connectBLETarget() override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).connectToTarget();
+#endif
+  }
+  
+  void disconnectBLE() override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).disconnect();
+#endif
+  }
+  
+  void getBLEStatus(char* reply) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).getStatus(reply);
+#else
+    strcpy(reply, "BLE backhaul not supported in this build");
+#endif
   }
 
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply) {

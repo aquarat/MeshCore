@@ -27,6 +27,18 @@ public:
   float packetScore(float snr, int packet_len) override { return 0; }
   uint32_t intID();
   void setTxPower(uint8_t dbm);
+  
+  // Configuration methods for manual pairing
+  void setTargetMAC(const char* mac_address);
+  void setServiceUUID(const char* uuid);
+  void setTxCharUUID(const char* uuid);
+  void setRxCharUUID(const char* uuid);
+  void setBLETxPower(uint8_t power);
+  void setAutoAdvertising(bool enable);
+  void connectToTarget();
+  void disconnect();
+  bool isConnected() const;
+  void getStatus(char* status_buffer);
 };
 
 #if BLE_DEBUG_LOGGING && ARDUINO

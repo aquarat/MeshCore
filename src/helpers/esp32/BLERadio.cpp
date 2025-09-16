@@ -5,10 +5,6 @@
 #include <BLE2902.h>
 #include <esp_bt.h>
 
-#define SERVICE_UUID        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-#define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-#define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-
 static BLEServer* pServer = NULL;
 static BLECharacteristic* pTxCharacteristic = NULL;
 static BLECharacteristic* pRxCharacteristic = NULL;
@@ -17,6 +13,13 @@ static bool advertisingStarted = false;
 static volatile bool is_send_complete = true;
 static uint8_t rx_buf[256];
 static uint8_t last_rx_len = 0;
+
+// Configuration variables
+static String target_mac_address = "";
+static String service_uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+static String tx_char_uuid = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
+static String rx_char_uuid = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
+static bool auto_advertising_enabled = false;
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -54,18 +57,18 @@ void BLERadio::init() {
   pServer->setCallbacks(new MyServerCallbacks());
 
   // Create the BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  BLEService *pService = pServer->createService(service_uuid.c_str());
 
   // Create a BLE Characteristic for transmission (TX from server perspective)
   pTxCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID_TX,
+                      tx_char_uuid.c_str(),
                       BLECharacteristic::PROPERTY_NOTIFY
                     );
   pTxCharacteristic->addDescriptor(new BLE2902());
 
   // Create a BLE Characteristic for receiving (RX from server perspective)
   pRxCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID_RX,
+                      rx_char_uuid.c_str(),
                       BLECharacteristic::PROPERTY_WRITE
                     );
   pRxCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
@@ -73,15 +76,21 @@ void BLERadio::init() {
   // Start the service
   pService->start();
 
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
-  BLEDevice::startAdvertising();
-  advertisingStarted = true;
-  
-  BLE_DEBUG_PRINTLN("Waiting for BLE backhaul connection...");
+  // Only start advertising if auto advertising is enabled
+  if (auto_advertising_enabled) {
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(service_uuid.c_str());
+    pAdvertising->setScanResponse(false);
+    pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+    BLEDevice::startAdvertising();
+    advertisingStarted = true;
+    BLE_DEBUG_PRINTLN("Auto-advertising started, waiting for BLE backhaul connection...");
+  } else {
+    BLE_DEBUG_PRINTLN("BLE backhaul initialized - manual pairing mode");
+    if (!target_mac_address.isEmpty()) {
+      BLE_DEBUG_PRINTLN("Target MAC configured: %s", target_mac_address.c_str());
+    }
+  }
   
   is_send_complete = true;
 }
@@ -170,4 +179,85 @@ uint32_t BLERadio::getEstAirtimeFor(int len_bytes) {
   // BLE v4.0 max throughput is around 125-235 kbps practical
   // Estimate ~10ms for small packets
   return 10 + (len_bytes / 10); // Rough estimate
+}
+
+// Configuration methods
+void BLERadio::setTargetMAC(const char* mac_address) {
+  target_mac_address = String(mac_address);
+  BLE_DEBUG_PRINTLN("Target MAC set to: %s", mac_address);
+}
+
+void BLERadio::setServiceUUID(const char* uuid) {
+  service_uuid = String(uuid);
+  BLE_DEBUG_PRINTLN("Service UUID set to: %s", uuid);
+}
+
+void BLERadio::setTxCharUUID(const char* uuid) {
+  tx_char_uuid = String(uuid);
+  BLE_DEBUG_PRINTLN("TX characteristic UUID set to: %s", uuid);
+}
+
+void BLERadio::setRxCharUUID(const char* uuid) {
+  rx_char_uuid = String(uuid);
+  BLE_DEBUG_PRINTLN("RX characteristic UUID set to: %s", uuid);
+}
+
+void BLERadio::setBLETxPower(uint8_t power) {
+  setTxPower(power);
+  BLE_DEBUG_PRINTLN("BLE TX power set to: %d", power);
+}
+
+void BLERadio::setAutoAdvertising(bool enable) {
+  auto_advertising_enabled = enable;
+  BLE_DEBUG_PRINTLN("Auto advertising %s", enable ? "enabled" : "disabled");
+  
+  if (enable && !advertisingStarted && pServer) {
+    // Start advertising if it wasn't started before
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(service_uuid.c_str());
+    pAdvertising->setScanResponse(false);
+    pAdvertising->setMinPreferred(0x0);
+    BLEDevice::startAdvertising();
+    advertisingStarted = true;
+    BLE_DEBUG_PRINTLN("Advertising started");
+  } else if (!enable && advertisingStarted) {
+    // Stop advertising
+    BLEDevice::stopAdvertising();
+    advertisingStarted = false;
+    BLE_DEBUG_PRINTLN("Advertising stopped");
+  }
+}
+
+void BLERadio::connectToTarget() {
+  if (target_mac_address.isEmpty()) {
+    BLE_DEBUG_PRINTLN("No target MAC address configured");
+    return;
+  }
+  
+  // Note: For ESP32 BLE, manual connection to a specific MAC requires 
+  // implementing a BLE client, which is complex. For now, we suggest
+  // using advertising mode or implementing client functionality.
+  BLE_DEBUG_PRINTLN("Manual connection to %s not yet implemented - use advertising mode", target_mac_address.c_str());
+}
+
+void BLERadio::disconnect() {
+  if (deviceConnected && pServer) {
+    // Disconnect all clients
+    pServer->disconnect(pServer->getConnId());
+    BLE_DEBUG_PRINTLN("BLE disconnected");
+  }
+}
+
+bool BLERadio::isConnected() const {
+  return deviceConnected;
+}
+
+void BLERadio::getStatus(char* status_buffer) {
+  sprintf(status_buffer, "BLE: %s, Target: %s, Auto-adv: %s, UUIDs: %s/%s/%s", 
+          deviceConnected ? "Connected" : "Disconnected",
+          target_mac_address.isEmpty() ? "None" : target_mac_address.c_str(),
+          auto_advertising_enabled ? "On" : "Off",
+          service_uuid.c_str(),
+          tx_char_uuid.c_str(),
+          rx_char_uuid.c_str());
 }

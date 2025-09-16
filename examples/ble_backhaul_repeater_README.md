@@ -1,6 +1,6 @@
 # BLE Backhaul Repeater Example
 
-This example demonstrates how to set up two repeaters linked via Bluetooth Low Energy backhaul.
+This example demonstrates how to set up two repeaters linked via Bluetooth Low Energy backhaul with manual configuration.
 
 ## Use Case
 
@@ -39,20 +39,73 @@ pio run --environment Generic_nRF52_BLE_Backhaul_repeatr
 pio run --environment Generic_nRF52_BLE_Backhaul_repeatr --target upload
 ```
 
+## Configuration Commands
+
+**NEW**: BLE backhaul supports manual configuration via console commands instead of automatic advertising.
+
+### Set Target Device MAC Address
+```
+set ble.target XX:XX:XX:XX:XX:XX
+```
+Configure the MAC address of the target repeater to connect to.
+
+### Configure BLE UUIDs
+```
+set ble.service.uuid 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+set ble.tx.uuid 6E400003-B5A3-F393-E0A9-E50E24DCCA9E
+set ble.rx.uuid 6E400002-B5A3-F393-E0A9-E50E24DCCA9E
+```
+
+### Set BLE Power
+```
+set ble.tx.power 3
+```
+Set BLE transmit power (0-20).
+
+### Enable/Disable Auto Advertising
+```
+set ble.auto.adv on   # Enable automatic advertising
+set ble.auto.adv off  # Disable automatic advertising (manual pairing)
+```
+
+### Manual Connection Control
+```
+ble connect      # Connect to configured target
+ble disconnect   # Disconnect BLE connection
+ble status       # Show BLE connection status
+```
+
+## Setup Process
+
+1. **Flash both devices** with BLE backhaul firmware
+2. **Configure Device A** (e.g., omnidirectional antenna):
+   ```
+   set ble.target AA:BB:CC:DD:EE:FF    # MAC of Device B
+   set ble.auto.adv on                 # Enable advertising
+   ```
+3. **Configure Device B** (e.g., directional antenna):
+   ```
+   set ble.target FF:EE:DD:CC:BB:AA    # MAC of Device A  
+   set ble.auto.adv off                # Disable advertising
+   ble connect                         # Connect to Device A
+   ```
+4. **Verify connection**: Use `ble status` on both devices
+
 ## Operation
 
-1. Power on both devices
-2. They will automatically discover each other via BLE advertising
-3. Once connected, packets are automatically forwarded between devices
-4. If connection is lost, advertising restarts automatically
-5. The mesh network sees this as a single repeater with combined coverage
+- Devices automatically discover each other based on configured MAC addresses
+- Packets are automatically forwarded between devices via BLE
+- Connection automatically restarts if disconnected
+- The mesh network sees this as a single repeater with combined coverage
+- Manual pairing provides better control than automatic discovery
 
 ## Advantages over ESP-NOW
 
-- Lower power consumption (better for solar installations)
-- No additional hardware required (no RS232 cables)
-- No water ingress points (fully wireless)
-- Works with both ESP32 and nRF52 platforms
+- **Manual Control**: Explicit pairing instead of automatic discovery
+- **Lower Power**: Better for solar installations
+- **No Additional Hardware**: No RS232 cables required
+- **Water Resistant**: Fully wireless connection
+- **Configurable**: UUIDs and power settings via console
 
 ## Debug Output
 
@@ -68,4 +121,13 @@ Enable debug logging to monitor BLE backhaul operation:
 Debug output shows:
 - BLE connection/disconnection events
 - Packet forwarding statistics
+- Configuration changes
 - Connection quality information
+
+## Configuration Persistence
+
+All BLE settings are saved to device preferences and restored on reboot:
+- Target MAC address
+- Service and characteristic UUIDs  
+- BLE power setting
+- Auto-advertising preference

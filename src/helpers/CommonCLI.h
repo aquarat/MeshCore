@@ -26,6 +26,13 @@ struct NodePrefs {  // persisted to file
     uint8_t flood_max;
     uint8_t interference_threshold;
     uint8_t agc_reset_interval;   // secs / 4
+    // BLE backhaul configuration
+    char ble_target_mac[18];          // MAC address of target device (format: XX:XX:XX:XX:XX:XX)
+    char ble_service_uuid[37];        // Service UUID (128-bit in string format)
+    char ble_tx_char_uuid[37];        // TX characteristic UUID
+    char ble_rx_char_uuid[37];        // RX characteristic UUID
+    uint8_t ble_tx_power;             // BLE transmit power
+    uint8_t ble_auto_advertising;     // 1 = enable auto advertising, 0 = manual pairing only
 };
 
 class CommonCLICallbacks {
@@ -48,6 +55,16 @@ public:
   };
   virtual mesh::LocalIdentity& getSelfId() = 0;
   virtual void saveIdentity(const mesh::LocalIdentity& new_id) = 0;
+  // BLE backhaul specific callbacks
+  virtual void setBLETargetMAC(const char* mac_address) { /* no op by default */ }
+  virtual void setBLEServiceUUID(const char* uuid) { /* no op by default */ }
+  virtual void setBLETxCharUUID(const char* uuid) { /* no op by default */ }
+  virtual void setBLERxCharUUID(const char* uuid) { /* no op by default */ }
+  virtual void setBLETxPower(uint8_t power) { /* no op by default */ }
+  virtual void setBLEAutoAdvertising(bool enable) { /* no op by default */ }
+  virtual void connectBLETarget() { /* no op by default */ }
+  virtual void disconnectBLE() { /* no op by default */ }
+  virtual void getBLEStatus(char* reply) { strcpy(reply, "BLE not supported"); }
   virtual void clearStats() = 0;
   virtual void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) = 0;
 };

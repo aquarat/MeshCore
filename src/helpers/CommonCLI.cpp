@@ -58,6 +58,14 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *) &_prefs->flood_max, sizeof(_prefs->flood_max));   // 124
     file.read((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.read((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
+    
+    // BLE backhaul fields (127+)
+    file.read((uint8_t *) &_prefs->ble_target_mac, sizeof(_prefs->ble_target_mac));  // 127
+    file.read((uint8_t *) &_prefs->ble_service_uuid, sizeof(_prefs->ble_service_uuid));  // 145
+    file.read((uint8_t *) &_prefs->ble_tx_char_uuid, sizeof(_prefs->ble_tx_char_uuid));  // 182
+    file.read((uint8_t *) &_prefs->ble_rx_char_uuid, sizeof(_prefs->ble_rx_char_uuid));  // 219
+    file.read((uint8_t *) &_prefs->ble_tx_power, sizeof(_prefs->ble_tx_power));  // 256
+    file.read((uint8_t *) &_prefs->ble_auto_advertising, sizeof(_prefs->ble_auto_advertising));  // 257
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -70,6 +78,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->cr = constrain(_prefs->cr, 5, 8);
     _prefs->tx_power_dbm = constrain(_prefs->tx_power_dbm, 1, 30);
     _prefs->multi_acks = constrain(_prefs->multi_acks, 0, 1);
+    _prefs->ble_tx_power = constrain(_prefs->ble_tx_power, 0, 20);
 
     file.close();
   }
@@ -114,6 +123,14 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *) &_prefs->flood_max, sizeof(_prefs->flood_max));   // 124
     file.write((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.write((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
+    
+    // BLE backhaul fields (127+)
+    file.write((uint8_t *) &_prefs->ble_target_mac, sizeof(_prefs->ble_target_mac));  // 127
+    file.write((uint8_t *) &_prefs->ble_service_uuid, sizeof(_prefs->ble_service_uuid));  // 145
+    file.write((uint8_t *) &_prefs->ble_tx_char_uuid, sizeof(_prefs->ble_tx_char_uuid));  // 182
+    file.write((uint8_t *) &_prefs->ble_rx_char_uuid, sizeof(_prefs->ble_rx_char_uuid));  // 219
+    file.write((uint8_t *) &_prefs->ble_tx_power, sizeof(_prefs->ble_tx_power));  // 256
+    file.write((uint8_t *) &_prefs->ble_auto_advertising, sizeof(_prefs->ble_auto_advertising));  // 257
 
     file.close();
   }
@@ -391,9 +408,47 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         _prefs->freq = atof(&config[5]);
         savePrefs();
         strcpy(reply, "OK - reboot to apply");
+      } else if (memcmp(config, "ble.target ", 11) == 0) {
+        StrHelper::strncpy(_prefs->ble_target_mac, &config[11], sizeof(_prefs->ble_target_mac));
+        savePrefs();
+        _callbacks->setBLETargetMAC(_prefs->ble_target_mac);
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "ble.service.uuid ", 17) == 0) {
+        StrHelper::strncpy(_prefs->ble_service_uuid, &config[17], sizeof(_prefs->ble_service_uuid));
+        savePrefs();
+        _callbacks->setBLEServiceUUID(_prefs->ble_service_uuid);
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "ble.tx.uuid ", 12) == 0) {
+        StrHelper::strncpy(_prefs->ble_tx_char_uuid, &config[12], sizeof(_prefs->ble_tx_char_uuid));
+        savePrefs();
+        _callbacks->setBLETxCharUUID(_prefs->ble_tx_char_uuid);
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "ble.rx.uuid ", 12) == 0) {
+        StrHelper::strncpy(_prefs->ble_rx_char_uuid, &config[12], sizeof(_prefs->ble_rx_char_uuid));
+        savePrefs();
+        _callbacks->setBLERxCharUUID(_prefs->ble_rx_char_uuid);
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "ble.tx.power ", 13) == 0) {
+        _prefs->ble_tx_power = atoi(&config[13]);
+        savePrefs();
+        _callbacks->setBLETxPower(_prefs->ble_tx_power);
+        strcpy(reply, "OK");
+      } else if (memcmp(config, "ble.auto.adv ", 13) == 0) {
+        _prefs->ble_auto_advertising = memcmp(&config[13], "on", 2) == 0;
+        savePrefs();
+        _callbacks->setBLEAutoAdvertising(_prefs->ble_auto_advertising);
+        strcpy(reply, "OK");
       } else {
         sprintf(reply, "unknown config: %s", config);
       }
+    } else if (memcmp(command, "ble connect", 11) == 0) {
+      _callbacks->connectBLETarget();
+      strcpy(reply, "OK - connecting to BLE target");
+    } else if (memcmp(command, "ble disconnect", 14) == 0) {
+      _callbacks->disconnectBLE();
+      strcpy(reply, "OK - disconnecting BLE");
+    } else if (memcmp(command, "ble status", 10) == 0) {
+      _callbacks->getBLEStatus(reply);
     } else if (sender_timestamp == 0 && strcmp(command, "erase") == 0) {
       bool s = _callbacks->formatFileSystem();
       sprintf(reply, "File system erase: %s", s ? "OK" : "Err");

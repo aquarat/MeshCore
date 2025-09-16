@@ -1,17 +1,20 @@
 #include "BLERadio.h"
 #include <bluefruit.h>
 
-#define SERVICE_UUID        0x0001
-#define CHARACTERISTIC_UUID_RX 0x0002
-#define CHARACTERISTIC_UUID_TX 0x0003
-
-static BLEService bleService(SERVICE_UUID);
-static BLECharacteristic bleTxChar(CHARACTERISTIC_UUID_TX);
-static BLECharacteristic bleRxChar(CHARACTERISTIC_UUID_RX);
+static BLEService bleService(0x0001);
+static BLECharacteristic bleTxChar(0x0003);
+static BLECharacteristic bleRxChar(0x0002);
 static bool deviceConnected = false;
 static volatile bool is_send_complete = true;
 static uint8_t rx_buf[256];
 static uint8_t last_rx_len = 0;
+
+// Configuration variables
+static String target_mac_address = "";
+static uint16_t service_uuid = 0x0001;
+static uint16_t tx_char_uuid = 0x0003;
+static uint16_t rx_char_uuid = 0x0002;
+static bool auto_advertising_enabled = false;
 
 static void connect_callback(uint16_t conn_handle) {
   deviceConnected = true;
@@ -59,17 +62,23 @@ void BLERadio::init() {
   bleRxChar.setWriteCallback(rx_callback);
   bleRxChar.begin();
   
-  // Start advertising
-  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
-  Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addService(bleService);
-  Bluefruit.Advertising.addName();
-  Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(32, 244);    // in unit of 0.625 ms
-  Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
-  Bluefruit.Advertising.start(0);                // 0 = Don't stop advertising after n seconds
-  
-  BLE_DEBUG_PRINTLN("Waiting for BLE backhaul connection...");
+  // Only start advertising if auto advertising is enabled
+  if (auto_advertising_enabled) {
+    Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+    Bluefruit.Advertising.addTxPower();
+    Bluefruit.Advertising.addService(bleService);
+    Bluefruit.Advertising.addName();
+    Bluefruit.Advertising.restartOnDisconnect(true);
+    Bluefruit.Advertising.setInterval(32, 244);    // in unit of 0.625 ms
+    Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
+    Bluefruit.Advertising.start(0);                // 0 = Don't stop advertising after n seconds
+    BLE_DEBUG_PRINTLN("Auto-advertising started, waiting for BLE backhaul connection...");
+  } else {
+    BLE_DEBUG_PRINTLN("BLE backhaul initialized - manual pairing mode");
+    if (!target_mac_address.isEmpty()) {
+      BLE_DEBUG_PRINTLN("Target MAC configured: %s", target_mac_address.c_str());
+    }
+  }
   
   is_send_complete = true;
 }
@@ -154,4 +163,88 @@ uint32_t BLERadio::getEstAirtimeFor(int len_bytes) {
   // BLE v4.0 max throughput is around 125-235 kbps practical
   // Estimate ~10ms for small packets
   return 10 + (len_bytes / 10); // Rough estimate
+}
+
+// Configuration methods
+void BLERadio::setTargetMAC(const char* mac_address) {
+  target_mac_address = String(mac_address);
+  BLE_DEBUG_PRINTLN("Target MAC set to: %s", mac_address);
+}
+
+void BLERadio::setServiceUUID(const char* uuid) {
+  // For nRF52, we use 16-bit UUIDs for simplicity
+  // This could be extended to support 128-bit UUIDs
+  service_uuid = strtoul(uuid, NULL, 16);
+  BLE_DEBUG_PRINTLN("Service UUID set to: 0x%04X", service_uuid);
+}
+
+void BLERadio::setTxCharUUID(const char* uuid) {
+  tx_char_uuid = strtoul(uuid, NULL, 16);
+  BLE_DEBUG_PRINTLN("TX characteristic UUID set to: 0x%04X", tx_char_uuid);
+}
+
+void BLERadio::setRxCharUUID(const char* uuid) {
+  rx_char_uuid = strtoul(uuid, NULL, 16);
+  BLE_DEBUG_PRINTLN("RX characteristic UUID set to: 0x%04X", rx_char_uuid);
+}
+
+void BLERadio::setBLETxPower(uint8_t power) {
+  setTxPower(power);
+  BLE_DEBUG_PRINTLN("BLE TX power set to: %d", power);
+}
+
+void BLERadio::setAutoAdvertising(bool enable) {
+  auto_advertising_enabled = enable;
+  BLE_DEBUG_PRINTLN("Auto advertising %s", enable ? "enabled" : "disabled");
+  
+  if (enable && !Bluefruit.Advertising.isRunning()) {
+    // Start advertising if it wasn't started before
+    Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+    Bluefruit.Advertising.addTxPower();
+    Bluefruit.Advertising.addService(bleService);
+    Bluefruit.Advertising.addName();
+    Bluefruit.Advertising.restartOnDisconnect(true);
+    Bluefruit.Advertising.setInterval(32, 244);
+    Bluefruit.Advertising.setFastTimeout(30);
+    Bluefruit.Advertising.start(0);
+    BLE_DEBUG_PRINTLN("Advertising started");
+  } else if (!enable && Bluefruit.Advertising.isRunning()) {
+    // Stop advertising
+    Bluefruit.Advertising.stop();
+    BLE_DEBUG_PRINTLN("Advertising stopped");
+  }
+}
+
+void BLERadio::connectToTarget() {
+  if (target_mac_address.isEmpty()) {
+    BLE_DEBUG_PRINTLN("No target MAC address configured");
+    return;
+  }
+  
+  // Note: For nRF52 BLE, manual connection to a specific MAC requires 
+  // implementing a BLE central role, which is complex. For now, we suggest
+  // using advertising mode or implementing central functionality.
+  BLE_DEBUG_PRINTLN("Manual connection to %s not yet implemented - use advertising mode", target_mac_address.c_str());
+}
+
+void BLERadio::disconnect() {
+  if (deviceConnected) {
+    // Disconnect current connection
+    Bluefruit.disconnect(Bluefruit.connHandle());
+    BLE_DEBUG_PRINTLN("BLE disconnected");
+  }
+}
+
+bool BLERadio::isConnected() const {
+  return deviceConnected;
+}
+
+void BLERadio::getStatus(char* status_buffer) {
+  sprintf(status_buffer, "BLE: %s, Target: %s, Auto-adv: %s, UUIDs: 0x%04X/0x%04X/0x%04X", 
+          deviceConnected ? "Connected" : "Disconnected",
+          target_mac_address.isEmpty() ? "None" : target_mac_address.c_str(),
+          auto_advertising_enabled ? "On" : "Off",
+          service_uuid,
+          tx_char_uuid,
+          rx_char_uuid);
 }
