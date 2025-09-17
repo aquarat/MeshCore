@@ -29,8 +29,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
-      BLE_DEBUG_PRINTLN("Device disconnected, restarting advertising");
-      BLEDevice::startAdvertising();
+      BLE_DEBUG_PRINTLN("Device disconnected");
     }
 };
 
@@ -87,7 +86,7 @@ void BLERadio::init() {
     BLE_DEBUG_PRINTLN("Auto-advertising started, waiting for BLE backhaul connection...");
   } else {
     BLE_DEBUG_PRINTLN("BLE backhaul initialized - manual pairing mode");
-    if (!target_mac_address.isEmpty()) {
+    if (target_mac_address.length() > 0) {
       BLE_DEBUG_PRINTLN("Target MAC configured: %s", target_mac_address.c_str());
     }
   }

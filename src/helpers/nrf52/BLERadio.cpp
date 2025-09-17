@@ -75,7 +75,7 @@ void BLERadio::init() {
     BLE_DEBUG_PRINTLN("Auto-advertising started, waiting for BLE backhaul connection...");
   } else {
     BLE_DEBUG_PRINTLN("BLE backhaul initialized - manual pairing mode");
-    if (!target_mac_address.isEmpty()) {
+    if (!target_mac_address.length() > 0) {
       BLE_DEBUG_PRINTLN("Target MAC configured: %s", target_mac_address.c_str());
     }
   }
@@ -93,7 +93,7 @@ void BLERadio::setTxPower(uint8_t dbm) {
 
 uint32_t BLERadio::intID() {
   uint8_t mac[6];
-  Bluefruit.Gap.getAddr(mac);
+  Bluefruit.getAddr(mac);
   uint32_t n, m;
   memcpy(&n, &mac[0], 4);
   memcpy(&m, &mac[2], 4);
@@ -216,7 +216,7 @@ void BLERadio::setAutoAdvertising(bool enable) {
 }
 
 void BLERadio::connectToTarget() {
-  if (target_mac_address.isEmpty()) {
+  if (target_mac_address.length() == 0) {
     BLE_DEBUG_PRINTLN("No target MAC address configured");
     return;
   }
@@ -242,7 +242,7 @@ bool BLERadio::isConnected() const {
 void BLERadio::getStatus(char* status_buffer) {
   sprintf(status_buffer, "BLE: %s, Target: %s, Auto-adv: %s, UUIDs: 0x%04X/0x%04X/0x%04X", 
           deviceConnected ? "Connected" : "Disconnected",
-          target_mac_address.isEmpty() ? "None" : target_mac_address.c_str(),
+          target_mac_address.length() > 0 ? target_mac_address.c_str() : "None",
           auto_advertising_enabled ? "On" : "Off",
           service_uuid,
           tx_char_uuid,
