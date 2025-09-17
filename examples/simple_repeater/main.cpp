@@ -837,6 +837,14 @@ public:
 #endif
   }
 
+  void getBLEMACAddress(char* reply) override {
+#ifdef BLE_BACKHAUL_RADIO
+    ((BLERadio&)radio_driver).getMACAddress(reply);
+#else
+    strcpy(reply, "BLE backhaul not supported in this build");
+#endif
+  }
+
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
     while (*command == ' ') command++;   // skip leading spaces
 

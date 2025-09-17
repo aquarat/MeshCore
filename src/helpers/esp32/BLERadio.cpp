@@ -252,11 +252,18 @@ bool BLERadio::isConnected() const {
 }
 
 void BLERadio::getStatus(char* status_buffer) {
-  sprintf(status_buffer, "BLE: %s, Target: %s, Auto-adv: %s, UUIDs: %s/%s/%s", 
+  sprintf(status_buffer, "BLE: %s, Target: %s, Auto-adv: %s, UUIDs: %s/%s/%s",
           deviceConnected ? "Connected" : "Disconnected",
           target_mac_address.isEmpty() ? "None" : target_mac_address.c_str(),
           auto_advertising_enabled ? "On" : "Off",
           service_uuid.c_str(),
           tx_char_uuid.c_str(),
           rx_char_uuid.c_str());
+}
+
+void BLERadio::getMACAddress(char* mac_buffer) {
+  uint8_t mac[6];
+  esp_efuse_mac_get_default(mac);
+  sprintf(mac_buffer, "%02X:%02X:%02X:%02X:%02X:%02X",
+          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }

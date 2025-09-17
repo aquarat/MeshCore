@@ -73,23 +73,28 @@ set ble.auto.adv off  # Disable automatic advertising (manual pairing)
 ble connect      # Connect to configured target
 ble disconnect   # Disconnect BLE connection
 ble status       # Show BLE connection status
+ble mac          # Show device's MAC address
 ```
 
 ## Setup Process
 
 1. **Flash both devices** with BLE backhaul firmware
-2. **Configure Device A** (e.g., omnidirectional antenna):
+2. **Get MAC addresses** from both devices:
    ```
-   set ble.target AA:BB:CC:DD:EE:FF    # MAC of Device B
+   ble mac                             # Note down the MAC address
+   ```
+3. **Configure Device A** (e.g., omnidirectional antenna):
+   ```
+   set ble.target AA:BB:CC:DD:EE:FF    # MAC of Device B (from step 2)
    set ble.auto.adv on                 # Enable advertising
    ```
-3. **Configure Device B** (e.g., directional antenna):
+4. **Configure Device B** (e.g., directional antenna):
    ```
-   set ble.target FF:EE:DD:CC:BB:AA    # MAC of Device A  
+   set ble.target FF:EE:DD:CC:BB:AA    # MAC of Device A (from step 2)
    set ble.auto.adv off                # Disable advertising
    ble connect                         # Connect to Device A
    ```
-4. **Verify connection**: Use `ble status` on both devices
+5. **Verify connection**: Use `ble status` on both devices
 
 ## Operation
 

@@ -65,6 +65,7 @@ public:
   virtual void connectBLETarget() { /* no op by default */ }
   virtual void disconnectBLE() { /* no op by default */ }
   virtual void getBLEStatus(char* reply) { strcpy(reply, "BLE not supported"); }
+  virtual void getBLEMACAddress(char* reply) { strcpy(reply, "BLE not supported"); }
   virtual void clearStats() = 0;
   virtual void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) = 0;
 };

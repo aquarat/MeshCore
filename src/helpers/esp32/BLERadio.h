@@ -39,6 +39,7 @@ public:
   void disconnect();
   bool isConnected() const;
   void getStatus(char* status_buffer);
+  void getMACAddress(char* mac_buffer);
 };
 
 #if BLE_DEBUG_LOGGING && ARDUINO

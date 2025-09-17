@@ -449,6 +449,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       strcpy(reply, "OK - disconnecting BLE");
     } else if (memcmp(command, "ble status", 10) == 0) {
       _callbacks->getBLEStatus(reply);
+    } else if (memcmp(command, "ble mac", 7) == 0) {
+      _callbacks->getBLEMACAddress(reply);
     } else if (sender_timestamp == 0 && strcmp(command, "erase") == 0) {
       bool s = _callbacks->formatFileSystem();
       sprintf(reply, "File system erase: %s", s ? "OK" : "Err");
