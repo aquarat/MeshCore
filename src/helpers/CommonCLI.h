@@ -26,6 +26,16 @@ struct NodePrefs {  // persisted to file
     uint8_t flood_max;
     uint8_t interference_threshold;
     uint8_t agc_reset_interval;   // secs / 4
+
+    // -------- BLE backhaul preferences (appended; safe for backward-compat) --------
+    // 0 = disabled, 1 = enabled
+    uint8_t ble_backhaul_enabled;
+    // 0 = peripheral (server), 1 = central (client)
+    uint8_t ble_backhaul_role;
+    // dBm, typical 0..4 for nrf52 Bluefruit (constrained when applied)
+    int8_t  ble_tx_power_dbm;
+    // Peer MAC address (little-endian as read from Bluefruit reports)
+    uint8_t ble_peer_mac[6];
 };
 
 class CommonCLICallbacks {

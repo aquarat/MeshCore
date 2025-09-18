@@ -59,6 +59,17 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.read((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
 
+    // Defaults for BLE backhaul (appended fields; maintain backward compatibility if absent)
+    _prefs->ble_backhaul_enabled = 0;
+    _prefs->ble_backhaul_role = 0;         // 0=peripheral, 1=central
+    _prefs->ble_tx_power_dbm = 0;          // 0 dBm default
+    memset(_prefs->ble_peer_mac, 0, sizeof(_prefs->ble_peer_mac));
+
+    // Attempt to read appended BLE backhaul fields (older files may not contain these)
+    file.read((uint8_t *)&_prefs->ble_backhaul_enabled, sizeof(_prefs->ble_backhaul_enabled));
+    file.read((uint8_t *)&_prefs->ble_backhaul_role, sizeof(_prefs->ble_backhaul_role));
+    file.read((uint8_t *)&_prefs->ble_tx_power_dbm, sizeof(_prefs->ble_tx_power_dbm));
+    file.read((uint8_t *)&_prefs->ble_peer_mac[0], sizeof(_prefs->ble_peer_mac));
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
     _prefs->tx_delay_factor = constrain(_prefs->tx_delay_factor, 0, 2.0f);
@@ -114,6 +125,12 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *) &_prefs->flood_max, sizeof(_prefs->flood_max));   // 124
     file.write((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.write((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
+
+    // -------- Append BLE backhaul fields (maintain backward-compat) --------
+    file.write((uint8_t *) &_prefs->ble_backhaul_enabled, sizeof(_prefs->ble_backhaul_enabled));
+    file.write((uint8_t *) &_prefs->ble_backhaul_role, sizeof(_prefs->ble_backhaul_role));
+    file.write((uint8_t *) &_prefs->ble_tx_power_dbm, sizeof(_prefs->ble_tx_power_dbm));
+    file.write((uint8_t *) &_prefs->ble_peer_mac[0], sizeof(_prefs->ble_peer_mac));
 
     file.close();
   }
