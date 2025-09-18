@@ -846,6 +846,50 @@ public:
       savePrefs();
       if (ble_bridge) ble_bridge->reconfigure();
       strcpy(reply, "OK"); return;
+    } else if (memcmp(command, "get ble.adv.interval", 20) == 0) {
+      // Print advertising min/max in milliseconds
+      uint16_t min_units = _prefs.ble_adv_itvl_min ? _prefs.ble_adv_itvl_min : 8000;
+      uint16_t max_units = _prefs.ble_adv_itvl_max ? _prefs.ble_adv_itvl_max : 16000;
+      uint32_t min_ms = (uint32_t)min_units * 5 / 8;
+      uint32_t max_ms = (uint32_t)max_units * 5 / 8;
+      sprintf(reply, "> %lu %lu", (unsigned long)min_ms, (unsigned long)max_ms);
+      return;
+    } else if (memcmp(command, "set ble.adv.interval ", 21) == 0) {
+      const char* args2 = &command[21];
+      // Expect: <min_ms> <max_ms>
+      unsigned long min_ms = 0, max_ms = 0;
+      if (sscanf(args2, "%lu %lu", &min_ms, &max_ms) < 2) { strcpy(reply, "ERR"); return; }
+      if (min_ms < 20) min_ms = 20;
+      if (max_ms < min_ms) max_ms = min_ms;
+      uint16_t min_units = (uint16_t)((min_ms * 8 + 2) / 5);
+      uint16_t max_units = (uint16_t)((max_ms * 8 + 2) / 5);
+      _prefs.ble_adv_itvl_min = min_units;
+      _prefs.ble_adv_itvl_max = max_units;
+      savePrefs();
+      if (ble_bridge) ble_bridge->reconfigure();
+      strcpy(reply, "OK"); return;
+    } else if (memcmp(command, "get ble.scan.interval", 21) == 0) {
+      // Print scanner interval/window in ms
+      uint16_t itvl_units = _prefs.ble_scan_itvl ? _prefs.ble_scan_itvl : 4800;
+      uint16_t win_units  = _prefs.ble_scan_window ? _prefs.ble_scan_window : 4800;
+      uint32_t itvl_ms = (uint32_t)itvl_units * 5 / 8;
+      uint32_t win_ms  = (uint32_t)win_units  * 5 / 8;
+      sprintf(reply, "> %lu %lu", (unsigned long)itvl_ms, (unsigned long)win_ms);
+      return;
+    } else if (memcmp(command, "set ble.scan.interval ", 22) == 0) {
+      const char* args3 = &command[22];
+      // Expect: <interval_ms> <window_ms>
+      unsigned long itvl_ms = 0, win_ms = 0;
+      if (sscanf(args3, "%lu %lu", &itvl_ms, &win_ms) < 2) { strcpy(reply, "ERR"); return; }
+      if (itvl_ms < 10) itvl_ms = 10;
+      if (win_ms > itvl_ms) win_ms = itvl_ms;
+      uint16_t itvl_units = (uint16_t)((itvl_ms * 8 + 2) / 5);
+      uint16_t win_units  = (uint16_t)((win_ms  * 8 + 2) / 5);
+      _prefs.ble_scan_itvl   = itvl_units;
+      _prefs.ble_scan_window = win_units;
+      savePrefs();
+      if (ble_bridge) ble_bridge->reconfigure();
+      strcpy(reply, "OK"); return;
     }
 #endif
 

@@ -106,7 +106,12 @@ void BLENUSBridge::initPeripheral() {
   Bluefruit.Advertising.addService(_periphUart);
   Bluefruit.ScanResponse.addName();
 
-  Bluefruit.Advertising.setInterval(32, 244); // 20ms - 152.5ms
+  {
+    // Intervals are in 0.625 ms units. Defaults: 5s..10s => (8000, 16000)
+    uint16_t advMin = _prefs->ble_adv_itvl_min ? _prefs->ble_adv_itvl_min : 8000;
+    uint16_t advMax = _prefs->ble_adv_itvl_max ? _prefs->ble_adv_itvl_max : 16000;
+    Bluefruit.Advertising.setInterval(advMin, advMax);
+  }
   Bluefruit.Advertising.setFastTimeout(30);
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.start(0);
@@ -120,7 +125,13 @@ void BLENUSBridge::centralStartScan() {
   Bluefruit.Scanner.clearFilters();
   // Filter by NUS service to avoid connecting to random devices
   Bluefruit.Scanner.filterUuid(BLEUART_UUID_SERVICE);
-  Bluefruit.Scanner.setInterval(160, 80);   // 100ms / 50ms
+  {
+    // Defaults: continuous scanning with 3s window => (4800, 4800)
+    uint16_t itvl = _prefs->ble_scan_itvl ? _prefs->ble_scan_itvl : 4800;
+    uint16_t win  = _prefs->ble_scan_window ? _prefs->ble_scan_window : 4800;
+    if (win > itvl) win = itvl; // Bluefruit requires window <= interval
+    Bluefruit.Scanner.setInterval(itvl, win);
+  }
   Bluefruit.Scanner.useActiveScan(true);
   Bluefruit.Scanner.setRxCallback(scanCallback);
   Bluefruit.Scanner.start(0); // forever
@@ -152,8 +163,8 @@ void BLENUSBridge::begin() {
     return;
   }
 
-  // Set name and TX power
-  Bluefruit.setName("MeshCore-Repeater");
+  // Set name and TX power (BLE name follows MeshCore node name)
+  Bluefruit.setName(_prefs->node_name);
   Bluefruit.setTxPower(_tx_power);
 
   // Initialize according to role

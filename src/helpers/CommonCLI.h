@@ -36,6 +36,14 @@ struct NodePrefs {  // persisted to file
     int8_t  ble_tx_power_dbm;
     // Peer MAC address (little-endian as read from Bluefruit reports)
     uint8_t ble_peer_mac[6];
+
+    // BLE advertising intervals (0.625 ms units). Defaults 8000..16000 (5s..10s).
+    uint16_t ble_adv_itvl_min;
+    uint16_t ble_adv_itvl_max;
+
+    // BLE scanner interval/window (0.625 ms units). Defaults 4800..4800 (3s continuous window).
+    uint16_t ble_scan_itvl;
+    uint16_t ble_scan_window;
 };
 
 class CommonCLICallbacks {
