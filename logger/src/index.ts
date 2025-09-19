@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 const noble = require('@abandonware/noble');
+import { getPrisma } from './db-helper';
 
 const NUS_SERVICE_UUID = '6e400001b5a3f393e0a9e50e24dcca9e';
 const NUS_CHAR_RX_UUID = '6e400002b5a3f393e0a9e50e24dcca9e'; // write
@@ -71,6 +72,108 @@ interface ParsedPacket {
     parsed?: any;
   };
   snr?: number;
+}
+
+interface PacketInfo {
+  rawData: Buffer;
+  parsedPacket: ParsedPacket;
+  deviceMac: string;
+  rssi: number;
+  timestamp: Date;
+  readableText?: string;
+}
+
+interface PacketListener {
+  onPacketReceived(packetInfo: PacketInfo): Promise<void> | void;
+}
+
+class PacketDistributor {
+  private listeners: PacketListener[] = [];
+
+  addListener(listener: PacketListener): void {
+    this.listeners.push(listener);
+  }
+
+  removeListener(listener: PacketListener): void {
+    const index = this.listeners.indexOf(listener);
+    if (index > -1) {
+      this.listeners.splice(index, 1);
+    }
+  }
+
+  async distributePacket(packetInfo: PacketInfo): Promise<void> {
+    const promises = this.listeners.map(listener => {
+      try {
+        return Promise.resolve(listener.onPacketReceived(packetInfo));
+      } catch (error) {
+        console.error('Error in packet listener:', error);
+        return Promise.resolve();
+      }
+    });
+
+    await Promise.allSettled(promises);
+  }
+}
+
+class DatabaseInserter implements PacketListener {
+  private prisma = getPrisma();
+
+  async onPacketReceived(packetInfo: PacketInfo): Promise<void> {
+    try {
+      const { rawData, parsedPacket, deviceMac, rssi, timestamp, readableText } = packetInfo;
+      
+      // Convert path from numbers to hex strings
+      const pathAsHexStrings = parsedPacket.path?.map(nodeHash =>
+        nodeHash.toString(16).padStart(2, '0')
+      ) || [];
+
+      await this.prisma.meshPacket.create({
+        data: {
+          rawHex: rawData.toString('hex'),
+          rawLength: rawData.length,
+          deviceMac,
+          rssi,
+          snr: parsedPacket.snr,
+          routeType: parsedPacket.header.routeType,
+          routeTypeName: parsedPacket.header.routeTypeName,
+          payloadType: parsedPacket.header.payloadType,
+          payloadTypeName: parsedPacket.header.payloadTypeName,
+          payloadVersion: parsedPacket.header.payloadVersion,
+          transportCode1: parsedPacket.transportCodes?.code1,
+          transportCode2: parsedPacket.transportCodes?.code2,
+          pathLength: parsedPacket.pathLength,
+          path: pathAsHexStrings,
+          payloadLength: parsedPacket.payloadLength,
+          payloadRaw: parsedPacket.payload.raw,
+          payloadParsed: parsedPacket.payload.parsed,
+          readableText,
+        },
+      });
+
+      console.log('✓ Packet saved to database');
+    } catch (error) {
+      console.error('Failed to save packet to database:', error);
+    }
+  }
+}
+
+class ConsoleLogger implements PacketListener {
+  onPacketReceived(packetInfo: PacketInfo): void {
+    const { rawData, parsedPacket, deviceMac, rssi, timestamp, readableText } = packetInfo;
+    
+    console.log('=== MESH PACKET RECEIVED ===');
+    console.log(`${timestamp.toISOString()} | device=${deviceMac} | rssi=${rssi} | payload_len=${rawData.length} | hex=${rawData.toString('hex')}`);
+    console.log('Hex formatted:');
+    console.log(hexPretty(rawData));
+    
+    if (readableText) {
+      console.log(`ASCII: ${readableText}`);
+    }
+    
+    console.log('=== PARSED PACKET ===');
+    console.log(JSON.stringify(parsedPacket, null, 2));
+    console.log('===============================');
+  }
 }
 
 class MeshPacketParser {
@@ -306,6 +409,11 @@ async function main(): Promise<void> {
   console.log('Initializing BLE...');
 
   const packetParser = new MeshPacketParser();
+  const packetDistributor = new PacketDistributor();
+  
+  // Add listeners
+  packetDistributor.addListener(new ConsoleLogger());
+  packetDistributor.addListener(new DatabaseInserter());
 
   // Wait for adapter
   noble.on('stateChange', async (state: string) => {
@@ -332,7 +440,7 @@ async function main(): Promise<void> {
     );
     const addr = peripheral.address ?? uniqueId;
     // Some stacks may report random address. If user provided full addr with colons, match exactly.
-    if (addr === targetMac) {
+    if (true || addr === targetMac) {
       console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi}) ${peripheral.MAC_ADDRESS}`);
 
       noble.stopScanning();
@@ -377,35 +485,34 @@ async function main(): Promise<void> {
           });
         });
 
-        txChar.on('data', (data: Buffer) => {
+        txChar.on('data', async (data: Buffer) => {
           console.log(`Received data from ${peripheral.address}: ${data.length} bytes`);
 
-          // The device sends raw mesh packet data directly (not bridge-wrapped)
-          // Display the payload content directly
-          const now = new Date().toISOString();
-          const hex = data.toString('hex');
-          const pretty = hexPretty(data);
-
-          console.log('=== MESH PACKET RECEIVED ===');
-          console.log(`${now} | payload_len=${data.length} | hex=${hex}`);
-          console.log('Hex formatted:');
-          console.log(pretty);
-
-          // Try to extract any readable ASCII text from the packet
-          const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
-          console.log(`ASCII: ${ascii}`);
-
-          // Parse the packet into structured data
           try {
+            // Parse the packet into structured data
             const parsedPacket = packetParser.parsePacket(data);
-            console.log('=== PARSED PACKET ===');
-            console.log(JSON.stringify(parsedPacket, null, 2));
+            
+            // Extract readable text
+            const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
+            const readableText = ascii.match(/[\x20-\x7E]{3,}/g)?.join(' ') || undefined;
+
+            // Create packet info for distribution
+            const packetInfo: PacketInfo = {
+              rawData: data,
+              parsedPacket,
+              deviceMac: peripheral.address || peripheral.id,
+              rssi: peripheral.rssi,
+              timestamp: new Date(),
+              readableText,
+            };
+
+            // Distribute to all listeners
+            await packetDistributor.distributePacket(packetInfo);
+            
           } catch (error) {
             console.log('=== PARSE ERROR ===');
             console.log(`Failed to parse packet: ${error}`);
           }
-
-          console.log('===============================');
         });
 
         console.log('Subscribed to notifications. Printing received packets to stdout...');
