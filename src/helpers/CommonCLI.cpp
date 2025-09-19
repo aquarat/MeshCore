@@ -67,12 +67,22 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->ble_backhaul_role = 0;         // 0=peripheral, 1=central
     _prefs->ble_tx_power_dbm = 0;          // 0 dBm default
     memset(_prefs->ble_peer_mac, 0, sizeof(_prefs->ble_peer_mac));
+    _prefs->ble_adv_itvl_min = 0;          // 0 = use defaults (8000 units = 5s)
+    _prefs->ble_adv_itvl_max = 0;          // 0 = use defaults (16000 units = 10s)
+    _prefs->ble_scan_itvl = 0;             // 0 = use defaults (4800 units = 3s)
+    _prefs->ble_scan_window = 0;           // 0 = use defaults (4800 units = 3s)
 
     // Attempt to read appended BLE backhaul fields (older files may not contain these)
     file.read((uint8_t *)&_prefs->ble_backhaul_enabled, sizeof(_prefs->ble_backhaul_enabled));
     file.read((uint8_t *)&_prefs->ble_backhaul_role, sizeof(_prefs->ble_backhaul_role));
     file.read((uint8_t *)&_prefs->ble_tx_power_dbm, sizeof(_prefs->ble_tx_power_dbm));
     file.read((uint8_t *)&_prefs->ble_peer_mac[0], sizeof(_prefs->ble_peer_mac));
+
+    // Attempt to read appended BLE interval fields
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_min, sizeof(_prefs->ble_adv_itvl_min));
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_max, sizeof(_prefs->ble_adv_itvl_max));
+    file.read((uint8_t *)&_prefs->ble_scan_itvl,    sizeof(_prefs->ble_scan_itvl));
+    file.read((uint8_t *)&_prefs->ble_scan_window,  sizeof(_prefs->ble_scan_window));
 
     // Defaults for BLE intervals (0 = use library defaults)
     _prefs->ble_adv_itvl_min = 0;
