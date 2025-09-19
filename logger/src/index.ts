@@ -30,23 +30,27 @@ class BridgeParser {
   feed(chunk: Buffer, onFrame: (payload: Uint8Array) => void): void {
     for (let i = 0; i < chunk.length; i++) {
       const b = chunk[i];
-      this.pos = this.pos + 1;
-      console.log(this.pos);
+      
       switch (this.pos) {
         case 0:
           if (b === MAGIC_HI) {
             this.rx[this.pos] = b;
+            this.pos++;
+          } else {
+            this.reset();
           }
           break;
         case 1:
           if (b === MAGIC_LO) {
             this.rx[this.pos] = b;
+            this.pos++;
           } else {
             this.reset();
           }
           break;
         case 2: // LEN_HI
           this.rx[this.pos] = b;
+          this.pos++;
           break;
         case 3: // LEN_LO
           this.rx[this.pos] = b;
@@ -54,14 +58,17 @@ class BridgeParser {
           // sanity: basic upper bound (Mesh packet wire length <= 255)
           if (this.expectedLen <= 0 || this.expectedLen > 255) {
             this.reset();
+          } else {
+            this.pos++;
           }
           break;
         default:
           this.rx[this.pos] = b;
+          this.pos++;
           // Full frame when we have header(2) + len(2) + payload + crc(2)
           if (this.pos === 4 + this.expectedLen + 2) {
             const crcHi = this.rx[4 + this.expectedLen] & 0xff;
-            const crcLo = this.rx[5 + this.expectedLen] & 0xff;
+            const crcLo = this.rx[4 + this.expectedLen + 1] & 0xff;
             const rcvCrc = (crcHi << 8) | crcLo;
 
             // validate CRC over payload only
@@ -132,11 +139,14 @@ async function main(): Promise<void> {
   });
 
   noble.on('discover', async (peripheral: any) => {
-    console.log(`Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi})`);
-    const addr = (peripheral.address || '').toLowerCase();
+    const uniqueId = peripheral.id;
+  const localName = peripheral.advertisement.localName;
+    console.log(`Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? 'Name: ' + localName : ''} ID: ${uniqueId}`);
+    const addr = peripheral.address || uniqueId;
     // Some stacks may report random address. If user provided full addr with colons, match exactly.
-    console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi})`);
-    if (true) { // addr === targetMac
+    if (addr === targetMac) {
+      console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi}) ${peripheral.MAC_ADDRESS}`);
+    
       noble.stopScanning();
 
       try {

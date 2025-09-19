@@ -27,6 +27,9 @@ importers:
       '@swc/core':
         specifier: ^1.13.5
         version: 1.13.5
+      '@types/noble':
+        specifier: ^0.0.44
+        version: 0.0.44
       '@types/node':
         specifier: ^20.19.17
         version: 20.19.17
@@ -172,6 +175,9 @@ packages:
 
   '@tsconfig/node16@1.0.4':
     resolution: {integrity: sha512-vxhUy4J8lyeyinH7Azl1pdd43GJhZH/tP2weN8TntQblOY+A0XbT8DJk1/oCPuOOyg/Ja757rG0CgHcWC8OfMA==}
+
+  '@types/noble@0.0.44':
+    resolution: {integrity: sha512-1b81FzYDtMSMdFCVcO6jAHrq7XCC5LuZcWHgIo8SjZpKlduNR7ID/TqRjP2ONCuHMxEbS7PRn9pttpN7hLwrUQ==}
 
   '@types/node@20.19.17':
     resolution: {integrity: sha512-gfehUI8N1z92kygssiuWvLiwcbOB3IRktR6hTDgJlXMYh5OvkPSRmgfoBUmfZt+vhwJtX7v1Yw4KvvAf7c5QKQ==}
@@ -1059,6 +1065,10 @@ snapshots:
   '@tsconfig/node14@1.0.3': {}
 
   '@tsconfig/node16@1.0.4': {}
+
+  '@types/noble@0.0.44':
+    dependencies:
+      '@types/node': 20.19.17
 
   '@types/node@20.19.17':
     dependencies:
