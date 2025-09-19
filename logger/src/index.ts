@@ -8,91 +8,277 @@ const NUS_CHAR_TX_UUID = '6e400003b5a3f393e0a9e50e24dcca9e'; // notify
 // Bridge framing (must match firmware):
 // [0] [1]   [2] [3]         [ ... len ... ]   [len+4] [len+5]
 // MAG_HI    MAG_LO          PAYLOAD(len)      CRC_HI   CRC_LO
-const BRIDGE_PACKET_MAGIC = 0xC03E;
-const MAGIC_HI = (BRIDGE_PACKET_MAGIC >> 8) & 0xff;
-const MAGIC_LO = BRIDGE_PACKET_MAGIC & 0xff;
+// const BRIDGE_PACKET_MAGIC = 0xc03e;
+// const MAGIC_HI = (BRIDGE_PACKET_MAGIC >> 8) & 0xff;
+// const MAGIC_LO = BRIDGE_PACKET_MAGIC & 0xff;
 
-function fletcher16(data: Uint8Array, len: number): number {
-  let sum1 = 0;
-  let sum2 = 0;
-  for (let i = 0; i < len; i++) {
-    sum1 = (sum1 + data[i]) % 255;
-    sum2 = (sum2 + sum1) % 255;
-  }
-  return ((sum2 & 0xff) << 8) | (sum1 & 0xff);
+// function fletcher16(data: Uint8Array, len: number): number {
+//   let sum1 = 0;
+//   let sum2 = 0;
+//   for (let i = 0; i < len; i++) {
+//     sum1 = (sum1 + data[i]) % 255;
+//     sum2 = (sum2 + sum1) % 255;
+//   }
+//   return ((sum2 & 0xff) << 8) | (sum1 & 0xff);
+// }
+
+// Packet parsing constants from Packet.h
+const PH_ROUTE_MASK = 0x03;
+const PH_TYPE_SHIFT = 2;
+const PH_TYPE_MASK = 0x0f;
+const PH_VER_SHIFT = 6;
+const PH_VER_MASK = 0x03;
+
+const ROUTE_TYPES: { [key: number]: string } = {
+  0x00: 'TRANSPORT_FLOOD',
+  0x01: 'FLOOD',
+  0x02: 'DIRECT',
+  0x03: 'TRANSPORT_DIRECT',
+};
+
+const PAYLOAD_TYPES: { [key: number]: string } = {
+  0x00: 'REQ',
+  0x01: 'RESPONSE',
+  0x02: 'TXT_MSG',
+  0x03: 'ACK',
+  0x04: 'ADVERT',
+  0x05: 'GRP_TXT',
+  0x06: 'GRP_DATA',
+  0x07: 'ANON_REQ',
+  0x08: 'PATH',
+  0x09: 'TRACE',
+  0x0a: 'MULTIPART',
+  0x0f: 'RAW_CUSTOM',
+};
+
+interface ParsedPacket {
+  header: {
+    routeType: number;
+    routeTypeName: string;
+    payloadType: number;
+    payloadTypeName: string;
+    payloadVersion: number;
+  };
+  transportCodes?: {
+    code1: number;
+    code2: number;
+  };
+  pathLength: number;
+  path?: number[];
+  payloadLength: number;
+  payload: {
+    raw: string;
+    parsed?: any;
+  };
+  snr?: number;
 }
 
-class BridgeParser {
-  private rx: number[] = [];
-  private pos = 0;
-  private expectedLen = 0;
+class MeshPacketParser {
+  parsePacket(data: Buffer): ParsedPacket {
+    let offset = 0;
 
-  feed(chunk: Buffer, onFrame: (payload: Uint8Array) => void): void {
-    for (let i = 0; i < chunk.length; i++) {
-      const b = chunk[i];
-      
-      switch (this.pos) {
-        case 0:
-          if (b === MAGIC_HI) {
-            this.rx[this.pos] = b;
-            this.pos++;
-          } else {
-            this.reset();
-          }
-          break;
-        case 1:
-          if (b === MAGIC_LO) {
-            this.rx[this.pos] = b;
-            this.pos++;
-          } else {
-            this.reset();
-          }
-          break;
-        case 2: // LEN_HI
-          this.rx[this.pos] = b;
-          this.pos++;
-          break;
-        case 3: // LEN_LO
-          this.rx[this.pos] = b;
-          this.expectedLen = ((this.rx[2] & 0xff) << 8) | (this.rx[3] & 0xff);
-          // sanity: basic upper bound (Mesh packet wire length <= 255)
-          if (this.expectedLen <= 0 || this.expectedLen > 255) {
-            this.reset();
-          } else {
-            this.pos++;
-          }
-          break;
-        default:
-          this.rx[this.pos] = b;
-          this.pos++;
-          // Full frame when we have header(2) + len(2) + payload + crc(2)
-          if (this.pos === 4 + this.expectedLen + 2) {
-            const crcHi = this.rx[4 + this.expectedLen] & 0xff;
-            const crcLo = this.rx[4 + this.expectedLen + 1] & 0xff;
-            const rcvCrc = (crcHi << 8) | crcLo;
+    // Parse header (1 byte)
+    const header = data[offset++];
+    const routeType = header & PH_ROUTE_MASK;
+    const payloadType = (header >> PH_TYPE_SHIFT) & PH_TYPE_MASK;
+    const payloadVersion = (header >> PH_VER_SHIFT) & PH_VER_MASK;
 
-            // validate CRC over payload only
-            const payload = new Uint8Array(this.expectedLen);
-            for (let j = 0; j < this.expectedLen; j++) payload[j] = this.rx[4 + j] & 0xff;
+    const result: ParsedPacket = {
+      header: {
+        routeType,
+        routeTypeName: ROUTE_TYPES[routeType] || `UNKNOWN_${routeType}`,
+        payloadType,
+        payloadTypeName: PAYLOAD_TYPES[payloadType] || `UNKNOWN_${payloadType}`,
+        payloadVersion,
+      },
+      pathLength: 0,
+      payloadLength: 0,
+      payload: {
+        raw: '',
+      },
+    };
 
-            const calc = fletcher16(payload, payload.length);
-            if (calc === rcvCrc) {
-              onFrame(payload);
-            } else {
-              const payloadHex = Buffer.from(payload).toString('hex');
-              console.error(`[WARN] checksum mismatch: calc=0x${calc.toString(16)} rcv=0x${rcvCrc.toString(16)} payload=${payloadHex}`);
-            }
-            this.reset();
-          }
-          break;
+    // Parse transport codes if present (4 bytes, little endian)
+    const hasTransportCodes = routeType === 0x00 || routeType === 0x03;
+    if (hasTransportCodes && offset + 4 <= data.length) {
+      const code1 = data.readUInt16LE(offset);
+      const code2 = data.readUInt16LE(offset + 2);
+      result.transportCodes = { code1, code2 };
+      offset += 4;
+    }
+
+    // Parse path length (1 byte)
+    if (offset < data.length) {
+      result.pathLength = data[offset++];
+
+      // Parse path (variable length)
+      if (result.pathLength > 0 && offset + result.pathLength <= data.length) {
+        result.path = [];
+        for (let i = 0; i < result.pathLength; i++) {
+          result.path.push(data[offset++]);
+        }
       }
+    }
+
+    // Remaining data is payload
+    if (offset < data.length) {
+      const payloadData = data.slice(offset);
+      result.payloadLength = payloadData.length;
+      result.payload.raw = payloadData.toString('hex');
+
+      // Parse payload based on type
+      result.payload.parsed = this.parsePayload(payloadType, payloadData);
+    }
+
+    return result;
+  }
+
+  private parsePayload(payloadType: number, payloadData: Buffer): any {
+    switch (payloadType) {
+      case 0x04: // ADVERT
+        return this.parseAdvertPayload(payloadData);
+      case 0x02: // TXT_MSG
+        return this.parseTextMessagePayload(payloadData);
+      case 0x00: // REQ
+      case 0x01: // RESPONSE
+      case 0x08: // PATH
+        return this.parseEncryptedPayload(payloadData);
+      case 0x05: // GRP_TXT
+      case 0x06: // GRP_DATA
+        return this.parseGroupPayload(payloadData);
+      default:
+        return this.parseGenericPayload(payloadData);
     }
   }
 
-  private reset(): void {
-    this.rx.length = 0;
-    this.pos = 0;
-    this.expectedLen = 0;
+  private parseAdvertPayload(data: Buffer): any {
+    if (data.length < 36) return { error: 'Advertisement too short' };
+
+    let offset = 0;
+    // Public key (32 bytes)
+    const publicKey = data.slice(offset, offset + 32).toString('hex');
+    offset += 32;
+
+    // Timestamp (4 bytes, little endian)
+    const timestamp = data.readUInt32LE(offset);
+    offset += 4;
+
+    const result: any = {
+      publicKey,
+      timestamp,
+      timestampDate: new Date(timestamp * 1000).toISOString(),
+    };
+
+    // Signature and app data (if present)
+    if (data.length > offset) {
+      const remaining = data.slice(offset);
+      result.signatureAndAppData = remaining.toString('hex');
+
+      // Try to extract readable text from end
+      const text = this.extractReadableText(remaining);
+      if (text) result.readableText = text;
+    }
+
+    return result;
+  }
+
+  private parseTextMessagePayload(data: Buffer): any {
+    if (data.length < 4) return { error: 'Text message too short' };
+
+    let offset = 0;
+    // Destination hash (1 byte)
+    const destHash = data[offset++];
+    // Source hash (1 byte)
+    const srcHash = data[offset++];
+    // Cipher MAC (2 bytes)
+    const cipherMac = data.readUInt16LE(offset);
+    offset += 2;
+
+    const result: any = {
+      destinationHash: destHash.toString(16).padStart(2, '0'),
+      sourceHash: srcHash.toString(16).padStart(2, '0'),
+      cipherMac: cipherMac.toString(16).padStart(4, '0'),
+    };
+
+    // Ciphertext (rest of payload)
+    if (data.length > offset) {
+      const ciphertext = data.slice(offset);
+      result.ciphertext = ciphertext.toString('hex');
+
+      // Try to extract readable text
+      const text = this.extractReadableText(ciphertext);
+      if (text) result.readableText = text;
+    }
+
+    return result;
+  }
+
+  private parseEncryptedPayload(data: Buffer): any {
+    if (data.length < 4) return { error: 'Encrypted payload too short' };
+
+    let offset = 0;
+    const destHash = data[offset++];
+    const srcHash = data[offset++];
+    const cipherMac = data.readUInt16LE(offset);
+    offset += 2;
+
+    const result: any = {
+      destinationHash: destHash.toString(16).padStart(2, '0'),
+      sourceHash: srcHash.toString(16).padStart(2, '0'),
+      cipherMac: cipherMac.toString(16).padStart(4, '0'),
+    };
+
+    if (data.length > offset) {
+      const ciphertext = data.slice(offset);
+      result.ciphertext = ciphertext.toString('hex');
+
+      const text = this.extractReadableText(ciphertext);
+      if (text) result.readableText = text;
+    }
+
+    return result;
+  }
+
+  private parseGroupPayload(data: Buffer): any {
+    if (data.length < 3) return { error: 'Group payload too short' };
+
+    let offset = 0;
+    const channelHash = data[offset++];
+    const cipherMac = data.readUInt16LE(offset);
+    offset += 2;
+
+    const result: any = {
+      channelHash: channelHash.toString(16).padStart(2, '0'),
+      cipherMac: cipherMac.toString(16).padStart(4, '0'),
+    };
+
+    if (data.length > offset) {
+      const ciphertext = data.slice(offset);
+      result.ciphertext = ciphertext.toString('hex');
+
+      const text = this.extractReadableText(ciphertext);
+      if (text) result.readableText = text;
+    }
+
+    return result;
+  }
+
+  private parseGenericPayload(data: Buffer): any {
+    const result: any = {
+      data: data.toString('hex'),
+    };
+
+    const text = this.extractReadableText(data);
+    if (text) result.readableText = text;
+
+    return result;
+  }
+
+  private extractReadableText(data: Buffer): string | null {
+    // Look for sequences of printable ASCII characters
+    const ascii = data.toString('ascii');
+    const readable = ascii.match(/[\x20-\x7E]{3,}/g);
+    return readable ? readable.join(' ') : null;
   }
 }
 
@@ -119,7 +305,7 @@ async function main(): Promise<void> {
   console.log(`Target MAC: ${targetMac}`);
   console.log('Initializing BLE...');
 
-  const parser = new BridgeParser();
+  const packetParser = new MeshPacketParser();
 
   // Wait for adapter
   noble.on('stateChange', async (state: string) => {
@@ -140,13 +326,15 @@ async function main(): Promise<void> {
 
   noble.on('discover', async (peripheral: any) => {
     const uniqueId = peripheral.id;
-  const localName = peripheral.advertisement.localName;
-    console.log(`Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? 'Name: ' + localName : ''} ID: ${uniqueId}`);
-    const addr = peripheral.address || uniqueId;
+    const { localName } = peripheral.advertisement;
+    console.log(
+      `Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? `Name: ${localName}` : ''} ID: ${uniqueId}`
+    );
+    const addr = peripheral.address ?? uniqueId;
     // Some stacks may report random address. If user provided full addr with colons, match exactly.
     if (addr === targetMac) {
       console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi}) ${peripheral.MAC_ADDRESS}`);
-    
+
       noble.stopScanning();
 
       try {
@@ -158,7 +346,7 @@ async function main(): Promise<void> {
         });
 
         console.log('Connected. Discovering services/characteristics...');
-        
+
         const { services, characteristics } = await new Promise<any>((resolve, reject) => {
           peripheral.discoverSomeServicesAndCharacteristics(
             [NUS_SERVICE_UUID],
@@ -191,17 +379,33 @@ async function main(): Promise<void> {
 
         txChar.on('data', (data: Buffer) => {
           console.log(`Received data from ${peripheral.address}: ${data.length} bytes`);
-          // Feed any size
-          parser.feed(data, (payload) => {
-            console.log('Payload frame received:');
-            // payload is a serialized Mesh packet as produced by Packet::writeTo()
-            // For logging, print both compact and pretty hex
-            const now = new Date().toISOString();
-            const hex = Buffer.from(payload).toString('hex');
-            const pretty = hexPretty(payload);
-            console.log(`${now} | payload_len=${payload.length} | hex=${hex}`);
-            console.log(pretty);
-          });
+
+          // The device sends raw mesh packet data directly (not bridge-wrapped)
+          // Display the payload content directly
+          const now = new Date().toISOString();
+          const hex = data.toString('hex');
+          const pretty = hexPretty(data);
+
+          console.log('=== MESH PACKET RECEIVED ===');
+          console.log(`${now} | payload_len=${data.length} | hex=${hex}`);
+          console.log('Hex formatted:');
+          console.log(pretty);
+
+          // Try to extract any readable ASCII text from the packet
+          const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
+          console.log(`ASCII: ${ascii}`);
+
+          // Parse the packet into structured data
+          try {
+            const parsedPacket = packetParser.parsePacket(data);
+            console.log('=== PARSED PACKET ===');
+            console.log(JSON.stringify(parsedPacket, null, 2));
+          } catch (error) {
+            console.log('=== PARSE ERROR ===');
+            console.log(`Failed to parse packet: ${error}`);
+          }
+
+          console.log('===============================');
         });
 
         console.log('Subscribed to notifications. Printing received packets to stdout...');

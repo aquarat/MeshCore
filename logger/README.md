@@ -1,6 +1,7 @@
 # BLE NUS Packet Logger
 
-A TypeScript application that connects to MeshCore repeaters via Bluetooth Low Energy (BLE) Nordic UART Service (NUS) and logs received mesh packets to stdout.
+A TypeScript application that connects to MeshCore repeaters via Bluetooth Low Energy (BLE) Nordic UART Service (NUS)
+and logs received mesh packets to stdout.
 
 ## Prerequisites
 
@@ -54,6 +55,7 @@ node dist/index.js 12:34:56:78:9a:bc
 ## Getting the repeater MAC
 
 Connect to the repeater via USB serial console and run:
+
 ```
 mac
 ```

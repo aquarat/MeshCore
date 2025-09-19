@@ -1,0 +1,11 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// https://www.prisma.io/docs/orm/prisma-client/setup-and-configuration/no-rust-engine
+generator client {
+  provider        = "prisma-client-js"
+}
+
+

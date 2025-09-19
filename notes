@@ -1,0 +1,26 @@
+This repository contains source code for firmware that targets multiple micro controller-based devices. These devices have Long Range (LoRa) radio modems attached to them and this firmware makes those devices form a mesh network for basic text communication and position reports.
+
+The firmware supports multiple target devices and each device can have multiple variants of the firmware.
+
+As an example, in variants/t1000-e/platformio.ini, the target is the t1000e or nrf52840_t1000e. For that device we have t1000e_repeater firmware, among others. For this task we are only concerned with the repeater firmware. We do not care about any other firmware.
+
+A pull request was recently approved and merged into this repository (PR  454 belonging to the meshcore-dev/MeshCore github repository, see https://github.com/meshcore-dev/MeshCore/pull/454 ). This PR merged in support for an "ESP-NOW" and RS232 backhauls for repeaters. The scenario is this: sometimes a high-site may have multiple repeaters, where one repeater has an omnidirectional antenna (good for receiving transmissions from local devices but bad at long distances) and another repeater attached to a highly directional antenna (good for repeating packets to and from a remote repeater far away).
+
+Normally, if one of the two co-located repeaters receives a packet, it repeats that packet and the other local repeater will then potentially receive that packet and also repeat it. This is not ideal because this process uses a lot of LoRa airtime. In this scenario it would be better to route these packets using some other method that doesn't use LoRa airtime. PR 454 from the remote repository added RS232 (cable) and ESP-NOW (a kind of wifi) as a non-LoRa method of moving these packets between repeaters. With this approach, a packet is received by one repeater and routed to the other repeater via an RS232 (cabled) backhaul. The connected repeater then repeats this packet as if it had received it directly via LoRa.
+
+I'd like to extend this approach to the nrf52 microcontrollers (like the nrf52840). These MCUs only support bluetooth low energy (BLE) as a wireless backhaul. BLE is a good choice for these machines because they are often solar powered and by extension power should be conserved. 
+
+For this task I want you to modify the existing `simple_repeater` example (which is used by all repeater variants). 
+
+We will use the `t1000e_repeater` target for testing. You can build the firmware for this target by running the following command:
+`FIRMWARE_VERSION=1.8.1-ble sh build.sh build-firmware t1000e_repeater`
+
+I'd like you to use the github MCP tool to inspect the above PR and linked issue. Understand how the PR implemented the ESP-NOW and RS232 backhaul changes. Then I'd like you to extend this approach to using bluetooth low energy on nrf52 devices for the backhaul.
+
+You should use the Nordic UART Service (NUS) for moving data between the two devices. One device will need to be configured as the server/peripheral and the other device the client/central.
+
+The MAC address of the remote device, whether or not the BLE backhaul is enabled and the device's role should be configurable through the firmware's terminal command system. This configuration should also be stored and re-applied on device reboot.
+
+Implement a full solution.
+
+
