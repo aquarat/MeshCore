@@ -1,10 +1,17 @@
-/* eslint-disable no-console */
-const noble = require('@abandonware/noble');
+import noble, { Peripheral } from '@stoprocent/noble';
 import { getPrisma } from './db-helper';
+import { createHash, createHmac, createDecipheriv } from 'crypto';
+import { promisify } from 'util';
 
-const NUS_SERVICE_UUID = '6e400001b5a3f393e0a9e50e24dcca9e';
-const NUS_CHAR_RX_UUID = '6e400002b5a3f393e0a9e50e24dcca9e'; // write
-const NUS_CHAR_TX_UUID = '6e400003b5a3f393e0a9e50e24dcca9e'; // notify
+function cleanUuid(uuid: string): string {
+  return uuid.toLowerCase().replace(/-/g, '');
+}
+
+const NUS_SERVICE_UUID = cleanUuid('6E400001-B5A3-F393-E0A9-E50E24DCCA9E');
+const NUS_CHAR_RX_UUID = cleanUuid('6E400002-B5A3-F393-E0A9-E50E24DCCA9E'); // write
+const NUS_CHAR_TX_UUID = cleanUuid('6E400003-B5A3-F393-E0A9-E50E24DCCA9E'); // notify
+
+noble.setMaxListeners(0);
 
 // Bridge framing (must match firmware):
 // [0] [1]   [2] [3]         [ ... len ... ]   [len+4] [len+5]
@@ -51,6 +58,93 @@ const PAYLOAD_TYPES: { [key: number]: string } = {
   0x0a: 'MULTIPART',
   0x0f: 'RAW_CUSTOM',
 };
+
+// Public channel encryption key (from FAQ)
+const PUBLIC_CHANNEL_KEY = Buffer.from('8b3387e9c5cdea6ac9e5edbaa115cd72', 'hex');
+
+class MeshCrypto {
+  static calculateChannelHash(channelKey: Buffer): number {
+    const hash = createHash('sha256').update(channelKey).digest();
+    return hash[0]; // First byte of SHA256
+  }
+
+  static macThenDecrypt(sharedSecret: Buffer, src: Buffer): Buffer | null {
+    if (src.length <= 2) return null; // Need at least MAC (2 bytes)
+
+    const mac = src.slice(0, 2);
+    const ciphertext = src.slice(2);
+
+    // Calculate HMAC-SHA256 of the ciphertext
+    const hmac = createHmac('sha256', sharedSecret).update(ciphertext).digest();
+    const calculatedMac = hmac.slice(0, 2); // First 2 bytes
+
+    // Verify MAC
+    if (!mac.equals(calculatedMac)) {
+      return null; // Invalid MAC
+    }
+
+    // Decrypt using AES128-ECB
+    try {
+      const decipher = createDecipheriv('aes-128-ecb', sharedSecret, null);
+      decipher.setAutoPadding(false); // Manual padding like the C++ code
+      let decrypted = decipher.update(ciphertext);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+      // Remove padding (find actual length)
+      let actualLength = decrypted.length;
+      while (actualLength > 0 && decrypted[actualLength - 1] === 0) {
+        actualLength--;
+      }
+
+      return decrypted.slice(0, actualLength);
+    } catch (error) {
+      console.log('Decryption error:', error);
+      return null;
+    }
+  }
+
+  static parseDecryptedGroupMessage(data: Buffer): any {
+    if (data.length < 5) return { error: 'Decrypted message too short' };
+
+    let offset = 0;
+
+    // Timestamp (4 bytes, little endian)
+    const timestamp = data.readUInt32LE(offset);
+    offset += 4;
+
+    // Flags byte (upper 6 bits are flags, lower 2 bits are attempt)
+    const flagsByte = data[offset++];
+    const flags = (flagsByte >> 2) & 0x3f;
+    const attempt = flagsByte & 0x03;
+
+    // Message content (rest of the data)
+    const messageBytes = data.slice(offset);
+    const message = messageBytes.toString('utf8').replace(/\0+$/, ''); // Remove null padding
+
+    return {
+      timestamp,
+      timestampDate: new Date(timestamp * 1000).toISOString(),
+      flags,
+      attempt,
+      flagsDescription: this.getFlagsDescription(flags),
+      message,
+      rawMessage: messageBytes.toString('hex'),
+    };
+  }
+
+  static getFlagsDescription(flags: number): string {
+    switch (flags) {
+      case 0x00:
+        return 'plain text message';
+      case 0x01:
+        return 'CLI command';
+      case 0x02:
+        return 'signed plain text message';
+      default:
+        return `unknown flags (0x${flags.toString(16).padStart(2, '0')})`;
+    }
+  }
+}
 
 interface ParsedPacket {
   header: {
@@ -102,7 +196,7 @@ class PacketDistributor {
   }
 
   async distributePacket(packetInfo: PacketInfo): Promise<void> {
-    const promises = this.listeners.map(listener => {
+    const promises = this.listeners.map((listener) => {
       try {
         return Promise.resolve(listener.onPacketReceived(packetInfo));
       } catch (error) {
@@ -121,11 +215,9 @@ class DatabaseInserter implements PacketListener {
   async onPacketReceived(packetInfo: PacketInfo): Promise<void> {
     try {
       const { rawData, parsedPacket, deviceMac, rssi, timestamp, readableText } = packetInfo;
-      
+
       // Convert path from numbers to hex strings
-      const pathAsHexStrings = parsedPacket.path?.map(nodeHash =>
-        nodeHash.toString(16).padStart(2, '0')
-      ) || [];
+      const pathAsHexStrings = parsedPacket.path?.map((nodeHash) => nodeHash.toString(16).padStart(2, '0')) || [];
 
       await this.prisma.meshPacket.create({
         data: {
@@ -160,16 +252,18 @@ class DatabaseInserter implements PacketListener {
 class ConsoleLogger implements PacketListener {
   onPacketReceived(packetInfo: PacketInfo): void {
     const { rawData, parsedPacket, deviceMac, rssi, timestamp, readableText } = packetInfo;
-    
+
     console.log('=== MESH PACKET RECEIVED ===');
-    console.log(`${timestamp.toISOString()} | device=${deviceMac} | rssi=${rssi} | payload_len=${rawData.length} | hex=${rawData.toString('hex')}`);
+    console.log(
+      `${timestamp.toISOString()} | device=${deviceMac} | rssi=${rssi} | payload_len=${rawData.length} | hex=${rawData.toString('hex')}`
+    );
     console.log('Hex formatted:');
     console.log(hexPretty(rawData));
-    
+
     if (readableText) {
       console.log(`ASCII: ${readableText}`);
     }
-    
+
     console.log('=== PARSED PACKET ===');
     console.log(JSON.stringify(parsedPacket, null, 2));
     console.log('===============================');
@@ -347,21 +441,38 @@ class MeshPacketParser {
 
     let offset = 0;
     const channelHash = data[offset++];
-    const cipherMac = data.readUInt16LE(offset);
-    offset += 2;
+    const macAndCiphertext = data.slice(offset);
 
     const result: any = {
       channelHash: channelHash.toString(16).padStart(2, '0'),
-      cipherMac: cipherMac.toString(16).padStart(4, '0'),
+      ciphertext: macAndCiphertext.toString('hex'),
     };
 
-    if (data.length > offset) {
-      const ciphertext = data.slice(offset);
-      result.ciphertext = ciphertext.toString('hex');
+    // Check if this is the public channel
+    const publicChannelHash = MeshCrypto.calculateChannelHash(PUBLIC_CHANNEL_KEY);
+    const isPublicChannel = channelHash === publicChannelHash;
 
-      const text = this.extractReadableText(ciphertext);
-      if (text) result.readableText = text;
+    result.isPublicChannel = isPublicChannel;
+
+    if (isPublicChannel) {
+      console.log('🔓 Attempting to decrypt public channel message...');
+
+      // Try to decrypt using the public channel key
+      const decrypted = MeshCrypto.macThenDecrypt(PUBLIC_CHANNEL_KEY, macAndCiphertext);
+
+      if (decrypted) {
+        console.log('✅ Successfully decrypted public channel message!');
+        result.decrypted = MeshCrypto.parseDecryptedGroupMessage(decrypted);
+        result.decryptedRaw = decrypted.toString('hex');
+      } else {
+        console.log('❌ Failed to decrypt public channel message');
+        result.decryptionError = 'Failed to decrypt (invalid MAC or corrupted data)';
+      }
     }
+
+    // Still extract readable text from raw ciphertext as fallback
+    const text = this.extractReadableText(macAndCiphertext);
+    if (text) result.readableText = text;
 
     return result;
   }
@@ -397,137 +508,273 @@ function usageAndExit(): void {
   process.exit(1);
 }
 
-// Linux note: Run with proper permissions (e.g., sudo) or grant setcap for BLE.
-async function main(): Promise<void> {
-  const macArg = (process.argv[2] || '').trim();
-  if (!macArg) usageAndExit();
-
-  // normalize mac to lowercase
-  const targetMac = macArg.toLowerCase();
-
-  console.log(`Target MAC: ${targetMac}`);
-  console.log('Initializing BLE...');
-
-  const packetParser = new MeshPacketParser();
-  const packetDistributor = new PacketDistributor();
+function normalizeUuid(input: string): string {
+  // Check if the string matches UUID format (with or without hyphens)
+  const uuidRegex = /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
   
-  // Add listeners
-  packetDistributor.addListener(new ConsoleLogger());
-  packetDistributor.addListener(new DatabaseInserter());
+  if (!uuidRegex.test(input)) {
+    return input; // Return original string if not a UUID
+  }
 
-  // Wait for adapter
-  noble.on('stateChange', async (state: string) => {
-    if (state !== 'poweredOn') {
-      console.error(`BLE adapter state: ${state}. Waiting for poweredOn...`);
-      return;
-    }
+  const normalized = input.toLowerCase().replace(/-/g, '');
+  console.log('Input looks like a UUID, normalizing to :', normalized);
+  // Convert to lowercase and remove hyphens
+  return normalized;
+}
 
-    console.log('BLE poweredOn, starting scan for NUS service...');
-    try {
-      // filter is advisory; we will further check peripheral.address
-      noble.startScanning([NUS_SERVICE_UUID], false);
-    } catch (e) {
-      console.error('Failed to start scanning:', e);
-      process.exit(2);
-    }
-  });
+// const newScanAndLog = async (): Promise<void> => {
+//   if (!process.argv[2]) usageAndExit();
+//   const targetMac = normalizeUuid((process.argv[2] || '').trim()).toLocaleLowerCase();
 
-  noble.on('discover', async (peripheral: any) => {
-    const uniqueId = peripheral.id;
-    const { localName } = peripheral.advertisement;
-    console.log(
-      `Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? `Name: ${localName}` : ''} ID: ${uniqueId}`
-    );
-    const addr = peripheral.address ?? uniqueId;
-    // Some stacks may report random address. If user provided full addr with colons, match exactly.
-    if (true || addr === targetMac) {
-      console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi}) ${peripheral.MAC_ADDRESS}`);
+//   console.log(`Target MAC: ${targetMac}`);
+//   console.log('Initializing BLE...');
 
-      noble.stopScanning();
+//   const packetParser = new MeshPacketParser();
+//   const packetDistributor = new PacketDistributor();
 
-      try {
-        await new Promise<void>((resolve, reject) => {
-          peripheral.connect((error: any) => {
-            if (error) reject(error);
-            else resolve();
-          });
-        });
+//   // Add listeners
+//   packetDistributor.addListener(new ConsoleLogger());
+//   packetDistributor.addListener(new DatabaseInserter());
 
-        console.log('Connected. Discovering services/characteristics...');
+//   const handlePeripheral = async (peripheral: Peripheral) => {
+//     console.log('Connecting to device...');
+//     await peripheral.connectAsync();
+//     // await new Promise<void>((resolve, reject) => {
+//     //   peripheral.connect((error: any) => {
+//     //     if (error) reject(error);
+//     //     else resolve();
+//     //   });
+//     // });
+//     console.log('Connected. Discovering services/characteristics...');
 
-        const { services, characteristics } = await new Promise<any>((resolve, reject) => {
-          peripheral.discoverSomeServicesAndCharacteristics(
-            [NUS_SERVICE_UUID],
-            [NUS_CHAR_TX_UUID, NUS_CHAR_RX_UUID],
-            (error: any, services: any, characteristics: any) => {
-              if (error) reject(error);
-              else resolve({ services, characteristics });
-            }
-          );
-        });
+//     const { services, characteristics } = await peripheral.discoverSomeServicesAndCharacteristicsAsync(
+//       [NUS_SERVICE_UUID],
+//       [NUS_CHAR_TX_UUID, NUS_CHAR_RX_UUID]
+//     );
 
-        if (!services.length) {
-          throw new Error('NUS service not found on device');
-        }
+//     if (!services.length) {
+//       throw new Error('NUS service not found on device');
+//     }
 
-        // TX (notify) characteristic: device -> host notifications
-        const txChar = characteristics.find((c: any) => c.uuid.toLowerCase() === NUS_CHAR_TX_UUID);
-        // RX (write) characteristic: host -> device (unused here, but keep reference)
-        const rxChar = characteristics.find((c: any) => c.uuid.toLowerCase() === NUS_CHAR_RX_UUID);
+//     // TX (notify) characteristic: device -> host notifications
+//     const txChar = characteristics.find((c) => c.uuid.toLowerCase() === NUS_CHAR_TX_UUID);
+//     // RX (write) characteristic: host -> device (unused here, but keep reference)
+//     const rxChar = characteristics.find((c) => c.uuid.toLowerCase() === NUS_CHAR_RX_UUID);
 
-        if (!txChar) throw new Error('NUS TX characteristic not found');
-        if (!rxChar) console.warn('NUS RX characteristic not found (continuing as receive-only)');
+//     if (!txChar) throw new Error('NUS TX characteristic not found');
+//     if (!rxChar) console.warn('NUS RX characteristic not found (continuing as receive-only)');
 
-        await new Promise<void>((resolve, reject) => {
-          txChar.subscribe((error: any) => {
-            if (error) reject(error);
-            else resolve();
-          });
-        });
+//     await txChar.subscribeAsync();
 
-        txChar.on('data', async (data: Buffer) => {
-          console.log(`Received data from ${peripheral.address}: ${data.length} bytes`);
+//     txChar.on('data', async (data: Buffer) => {
+//       console.log(`Received data from ${peripheral.address}: ${data.length} bytes`);
 
-          try {
-            // Parse the packet into structured data
-            const parsedPacket = packetParser.parsePacket(data);
-            
-            // Extract readable text
-            const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
-            const readableText = ascii.match(/[\x20-\x7E]{3,}/g)?.join(' ') || undefined;
+//       try {
+//         // Parse the packet into structured data
+//         const parsedPacket = packetParser.parsePacket(data);
 
-            // Create packet info for distribution
-            const packetInfo: PacketInfo = {
-              rawData: data,
-              parsedPacket,
-              deviceMac: peripheral.address || peripheral.id,
-              rssi: peripheral.rssi,
-              timestamp: new Date(),
-              readableText,
-            };
+//         // Extract readable text
+//         const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
+//         const readableText = ascii.match(/[\x20-\x7E]{3,}/g)?.join(' ') || undefined;
 
-            // Distribute to all listeners
-            await packetDistributor.distributePacket(packetInfo);
-            
-          } catch (error) {
-            console.log('=== PARSE ERROR ===');
-            console.log(`Failed to parse packet: ${error}`);
-          }
-        });
+//         // Create packet info for distribution
+//         const packetInfo: PacketInfo = {
+//           rawData: data,
+//           parsedPacket,
+//           deviceMac: peripheral.address || peripheral.id,
+//           rssi: peripheral.rssi,
+//           timestamp: new Date(),
+//           readableText,
+//         };
 
-        console.log('Subscribed to notifications. Printing received packets to stdout...');
-        // Keep the process alive
-        peripheral.on('disconnect', () => {
-          console.error('Disconnected from device.');
-          process.exit(0);
-        });
-      } catch (e) {
-        console.error('Error during BLE operations:', e);
-        process.exit(3);
+//         // Distribute to all listeners
+//         await packetDistributor.distributePacket(packetInfo);
+//       } catch (error) {
+//         console.error('Error processing data:', error);
+//       }
+//     });
+//   };
+
+//   try {
+//     await noble.waitForPoweredOnAsync();
+//     console.log('Our address:', noble.address);
+//     console.log('BLE poweredOn, starting scan for NUS service...');
+//     // Start scanning first
+//     await noble.startScanningAsync([NUS_SERVICE_UUID], false);
+//     console.log('Scanning started for NUS service...');
+
+//     // Use the async generator with proper boundaries
+//     for await (const peripheral of noble.discoverAsync()) {
+//       const localName = peripheral.advertisement.localName || 'Unknown';
+//       if (localName.includes('aqua')) {
+//         console.log(`Found device: ${localName}`);
+//       }
+
+//       const uniqueId = peripheral.id;
+//       const addr = peripheral.address ?? uniqueId;
+//       // Some stacks may report random address. If user provided full addr with colons, match exactly.
+//       console.log(`Comparing discovered ${addr} with target ${targetMac} and name ${localName}`);
+//       if (true || addr === targetMac || localName.includes(targetMac)) {
+//         console.log(`Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? `Name: ${localName}` : ''} ID: ${uniqueId} ${peripheral.addressType}`);
+
+//         await noble.stopScanningAsync();
+//         await handlePeripheral(peripheral);
+//         // Clean up after discovery
+//         break;
+//       }
+//     }
+//     await noble.stopScanningAsync();
+//   } catch (e) {
+//     console.error('Discovery error:', e);
+//   }
+// };
+
+// Linux note: Run with proper permissions (e.g., sudo) or grant setcap for BLE.
+async function scanAndLog(): Promise<void> {
+  return new Promise<void>((mainResolve, mainReject) => {
+    const macArg = (process.argv[2] || '').trim();
+    if (!macArg) usageAndExit();
+
+    // normalize mac to lowercase
+    const targetMac = macArg.toLowerCase();
+
+    console.log(`Target MAC: ${targetMac}`);
+    console.log('Initializing BLE...');
+
+    const packetParser = new MeshPacketParser();
+    const packetDistributor = new PacketDistributor();
+
+    // Add listeners
+    packetDistributor.addListener(new ConsoleLogger());
+    packetDistributor.addListener(new DatabaseInserter());
+
+    // Wait for adapter
+    noble.on('stateChange', async (state: string) => {
+      if (state !== 'poweredOn') {
+        console.error(`BLE adapter state: ${state}. Waiting for poweredOn...`);
+        return;
       }
-    }
+
+      console.log('BLE poweredOn, starting scan for NUS service...');
+      try {
+        // filter is advisory; we will further check peripheral.address
+        noble.startScanning([NUS_SERVICE_UUID], false);
+      } catch (e) {
+        console.error('Failed to start scanning:', e);
+        process.exit(2);
+      }
+    });
+
+    noble.on('discover', async (peripheral: any) => {
+      const uniqueId = peripheral.id;
+      const { localName } = peripheral.advertisement;
+      console.log(
+        `Discovered device: ${peripheral.address} (RSSI ${peripheral.rssi}) ${localName ? `Name: ${localName}` : ''} ID: ${uniqueId}`
+      );
+      const addr = peripheral.address ?? uniqueId;
+      // Some stacks may report random address. If user provided full addr with colons, match exactly.
+      if (addr === targetMac || localName === targetMac) {
+        console.log(`Found target ${peripheral.address} (RSSI ${peripheral.rssi}) ${peripheral.MAC_ADDRESS}`);
+
+        noble.stopScanning();
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            peripheral.connect((error: any) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          });
+
+          console.log('Connected. Discovering services/characteristics...');
+
+          const { services, characteristics } = await new Promise<any>((resolve, reject) => {
+            peripheral.discoverSomeServicesAndCharacteristics(
+              [NUS_SERVICE_UUID],
+              [NUS_CHAR_TX_UUID, NUS_CHAR_RX_UUID],
+              (error: any, services: any, characteristics: any) => {
+                if (error) reject(error);
+                else resolve({ services, characteristics });
+              }
+            );
+          });
+
+          if (!services.length) {
+            throw new Error('NUS service not found on device');
+          }
+
+          // TX (notify) characteristic: device -> host notifications
+          const txChar = characteristics.find((c: any) => c.uuid.toLowerCase() === NUS_CHAR_TX_UUID);
+          // RX (write) characteristic: host -> device (unused here, but keep reference)
+          const rxChar = characteristics.find((c: any) => c.uuid.toLowerCase() === NUS_CHAR_RX_UUID);
+
+          if (!txChar) throw new Error('NUS TX characteristic not found');
+          if (!rxChar) console.warn('NUS RX characteristic not found (continuing as receive-only)');
+
+          await new Promise<void>((resolve, reject) => {
+            txChar.subscribe((error: any) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          });
+
+          txChar.on('data', async (data: Buffer) => {
+            console.log(`Received data from ${peripheral.address}: ${data.length} bytes`);
+
+            try {
+              // Parse the packet into structured data
+              const parsedPacket = packetParser.parsePacket(data);
+
+              // Extract readable text
+              const ascii = data.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
+              const readableText = ascii.match(/[\x20-\x7E]{3,}/g)?.join(' ') || undefined;
+
+              // Create packet info for distribution
+              const packetInfo: PacketInfo = {
+                rawData: data,
+                parsedPacket,
+                deviceMac: peripheral.address || peripheral.id,
+                rssi: peripheral.rssi,
+                timestamp: new Date(),
+                readableText,
+              };
+
+              // Distribute to all listeners
+              await packetDistributor.distributePacket(packetInfo);
+            } catch (error) {
+              console.log('=== PARSE ERROR ===');
+              console.log(`Failed to parse packet: ${error}`);
+            }
+          });
+
+          console.log('Subscribed to notifications. Printing received packets to stdout...');
+          // Keep the process alive
+          peripheral.on('disconnect', () => {
+            console.error('Disconnected from device.');
+            try {
+              noble.stopScanning();
+            } catch (error) {
+              console.error('Error stopping scan:', error);
+            }
+            mainReject(new Error('Disconnected from device'));
+          });
+        } catch (e) {
+          console.error('Error during BLE operations:', e);
+          mainReject(e);
+        }
+      }
+    });
   });
 }
+
+const main = async () => {
+  while (true) {
+    await scanAndLog().catch((e) => {
+      // await noble.stopScanningAsync();
+      console.error('Error in scanAndLog:', e);
+    });
+  }
+};
 
 main().catch((e) => {
   console.error('Fatal error:', e);
