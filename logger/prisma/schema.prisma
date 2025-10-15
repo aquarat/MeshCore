@@ -1,0 +1,52 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// https://www.prisma.io/docs/orm/prisma-client/setup-and-configuration/no-rust-engine
+generator client {
+  provider        = "prisma-client-js"
+}
+
+model MeshPacket {
+  // Primary identifier
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  // Raw packet data
+  rawHex       String  // Original hex data
+  rawLength    Int     // Length of raw packet in bytes
+  deviceMac    String? // MAC address of source device
+  rssi         Int?    // Signal strength
+  snr          Float?  // Signal-to-noise ratio
+
+  // Header information
+  routeType        Int
+  routeTypeName    String
+  payloadType      Int
+  payloadTypeName  String
+  payloadVersion   Int
+
+  // Transport codes (optional)
+  transportCode1 Int?
+  transportCode2 Int?
+
+  // Path information
+  pathLength Int
+  path       String[] // Array of node hashes in the path
+
+  // Payload information
+  payloadLength Int
+  payloadRaw    String // Raw payload hex
+  payloadParsed Json?  // Parsed payload as JSON
+
+  // Extracted readable text (if any)
+  readableText String?
+
+  // Indexes for common queries
+  @@index([createdAt])
+  @@index([payloadType])
+  @@index([deviceMac])
+  @@index([payloadTypeName])
+  @@map("mesh_packets")
+}

@@ -2,6 +2,9 @@
 #include "CommonCLI.h"
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
+#ifdef NRF52_PLATFORM
+#include <nrf.h>
+#endif
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -59,6 +62,40 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.read((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
 
+    // Defaults for BLE backhaul (appended fields; maintain backward compatibility if absent)
+    _prefs->ble_backhaul_enabled = 0;
+    _prefs->ble_backhaul_role = 0;         // 0=peripheral, 1=central
+    _prefs->ble_tx_power_dbm = 0;          // 0 dBm default
+    memset(_prefs->ble_peer_mac, 0, sizeof(_prefs->ble_peer_mac));
+    _prefs->ble_adv_itvl_min = 0;          // 0 = use defaults (8000 units = 5s)
+    _prefs->ble_adv_itvl_max = 0;          // 0 = use defaults (16000 units = 10s)
+    _prefs->ble_scan_itvl = 0;             // 0 = use defaults (4800 units = 3s)
+    _prefs->ble_scan_window = 0;           // 0 = use defaults (4800 units = 3s)
+
+    // Attempt to read appended BLE backhaul fields (older files may not contain these)
+    file.read((uint8_t *)&_prefs->ble_backhaul_enabled, sizeof(_prefs->ble_backhaul_enabled));
+    file.read((uint8_t *)&_prefs->ble_backhaul_role, sizeof(_prefs->ble_backhaul_role));
+    file.read((uint8_t *)&_prefs->ble_tx_power_dbm, sizeof(_prefs->ble_tx_power_dbm));
+    file.read((uint8_t *)&_prefs->ble_peer_mac[0], sizeof(_prefs->ble_peer_mac));
+
+    // Attempt to read appended BLE interval fields
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_min, sizeof(_prefs->ble_adv_itvl_min));
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_max, sizeof(_prefs->ble_adv_itvl_max));
+    file.read((uint8_t *)&_prefs->ble_scan_itvl,    sizeof(_prefs->ble_scan_itvl));
+    file.read((uint8_t *)&_prefs->ble_scan_window,  sizeof(_prefs->ble_scan_window));
+
+    // Defaults for BLE intervals (0 = use library defaults)
+    _prefs->ble_adv_itvl_min = 0;
+    _prefs->ble_adv_itvl_max = 0;
+    _prefs->ble_scan_itvl    = 0;
+    _prefs->ble_scan_window  = 0;
+
+    // Attempt to read appended BLE interval fields
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_min, sizeof(_prefs->ble_adv_itvl_min));
+    file.read((uint8_t *)&_prefs->ble_adv_itvl_max, sizeof(_prefs->ble_adv_itvl_max));
+    file.read((uint8_t *)&_prefs->ble_scan_itvl,    sizeof(_prefs->ble_scan_itvl));
+    file.read((uint8_t *)&_prefs->ble_scan_window,  sizeof(_prefs->ble_scan_window));
+
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
     _prefs->tx_delay_factor = constrain(_prefs->tx_delay_factor, 0, 2.0f);
@@ -115,6 +152,18 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *) &_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));  // 125
     file.write((uint8_t *) &_prefs->interference_threshold, sizeof(_prefs->interference_threshold));  // 126
 
+    // -------- Append BLE backhaul fields (maintain backward-compat) --------
+    file.write((uint8_t *) &_prefs->ble_backhaul_enabled, sizeof(_prefs->ble_backhaul_enabled));
+    file.write((uint8_t *) &_prefs->ble_backhaul_role, sizeof(_prefs->ble_backhaul_role));
+    file.write((uint8_t *) &_prefs->ble_tx_power_dbm, sizeof(_prefs->ble_tx_power_dbm));
+    file.write((uint8_t *) &_prefs->ble_peer_mac[0], sizeof(_prefs->ble_peer_mac));
+
+    // Append BLE interval configuration
+    file.write((uint8_t *) &_prefs->ble_adv_itvl_min, sizeof(_prefs->ble_adv_itvl_min));
+    file.write((uint8_t *) &_prefs->ble_adv_itvl_max, sizeof(_prefs->ble_adv_itvl_max));
+    file.write((uint8_t *) &_prefs->ble_scan_itvl,    sizeof(_prefs->ble_scan_itvl));
+    file.write((uint8_t *) &_prefs->ble_scan_window,  sizeof(_prefs->ble_scan_window));
+
     file.close();
   }
 }
@@ -152,6 +201,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
       uint32_t now = getRTCClock()->getCurrentTime();
       DateTime dt = DateTime(now);
       sprintf(reply, "%02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+#if defined(NRF52_PLATFORM)
+    } else if (memcmp(command, "mac", 3) == 0) {
+      // Print device MAC from FICR
+      uint32_t l = NRF_FICR->DEVICEADDR[0];
+      uint32_t h = NRF_FICR->DEVICEADDR[1] & 0xFFFF;
+      uint8_t mac[6];
+      mac[0] = (uint8_t)(l & 0xFF);
+      mac[1] = (uint8_t)((l >> 8) & 0xFF);
+      mac[2] = (uint8_t)((l >> 16) & 0xFF);
+      mac[3] = (uint8_t)((l >> 24) & 0xFF);
+      mac[4] = (uint8_t)(h & 0xFF);
+      mac[5] = (uint8_t)((h >> 8) & 0xFF);
+      // Print MSB-first conventional order
+      sprintf(reply, "> %02X:%02X:%02X:%02X:%02X:%02X", mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
+#endif
     } else if (memcmp(command, "time ", 5) == 0) {  // set time (to epoch seconds)
       uint32_t secs = _atoi(&command[5]);
       uint32_t curr = getRTCClock()->getCurrentTime();

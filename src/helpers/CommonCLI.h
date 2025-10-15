@@ -26,6 +26,24 @@ struct NodePrefs {  // persisted to file
     uint8_t flood_max;
     uint8_t interference_threshold;
     uint8_t agc_reset_interval;   // secs / 4
+
+    // -------- BLE backhaul preferences (appended; safe for backward-compat) --------
+    // 0 = disabled, 1 = enabled
+    uint8_t ble_backhaul_enabled;
+    // 0 = peripheral (server), 1 = central (client)
+    uint8_t ble_backhaul_role;
+    // dBm, typical 0..4 for nrf52 Bluefruit (constrained when applied)
+    int8_t  ble_tx_power_dbm;
+    // Peer MAC address (little-endian as read from Bluefruit reports)
+    uint8_t ble_peer_mac[6];
+
+    // BLE advertising intervals (0.625 ms units). Defaults 8000..16000 (5s..10s).
+    uint16_t ble_adv_itvl_min;
+    uint16_t ble_adv_itvl_max;
+
+    // BLE scanner interval/window (0.625 ms units). Defaults 4800..4800 (3s continuous window).
+    uint16_t ble_scan_itvl;
+    uint16_t ble_scan_window;
 };
 
 class CommonCLICallbacks {

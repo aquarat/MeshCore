@@ -19,7 +19,14 @@
 #include <RTClib.h>
 #include <target.h>
 
-/* ------------------------------ Config -------------------------------- */
+#ifdef WITH_BLE_BRIDGE
+  #include "helpers/bridges/BridgeBase.h"
+  #ifdef NRF52_PLATFORM
+    #include "helpers/nrf52/BLENUSBridge.h"
+  #endif
+#endif
+
+ /* ------------------------------ Config -------------------------------- */
 
 #ifndef FIRMWARE_BUILD_DATE
   #define FIRMWARE_BUILD_DATE   "1 Sep 2025"
@@ -122,6 +129,13 @@ struct NeighbourInfo {
 };
 
 #define CLI_REPLY_DELAY_MILLIS  600
+
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+// Use a shared PacketManager so the BLE bridge and Mesh use the same pool
+static StaticPoolPacketManager* g_bridge_mgr = new StaticPoolPacketManager(32);
+static BLENUSBridge* ble_bridge = nullptr;
+static inline BLENUSBridge* get_ble_bridge() { return ble_bridge; }
+#endif
 
 class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   FILESYSTEM* _fs;
@@ -300,6 +314,11 @@ protected:
     }
   }
   void logTx(mesh::Packet* pkt, int len) override {
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+    if (ble_bridge && _prefs.ble_backhaul_enabled) {
+      ble_bridge->onPacketTransmitted(pkt);
+    }
+#endif
     if (_logging) {
       File f = openAppend(PACKET_LOG_FILE);
       if (f) {
@@ -562,9 +581,13 @@ protected:
 
 public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables)
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+     : mesh::Mesh(radio, ms, rng, rtc, *g_bridge_mgr, tables),
+#else
      : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
+#endif
       _cli(board, rtc, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
-  {
+   {
     memset(known_clients, 0, sizeof(known_clients));
     next_local_advert = next_flood_advert = 0;
     set_radio_at = revert_radio_at = 0;
@@ -761,10 +784,124 @@ public:
       command += 3;
     }
 
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+    // BLE backhaul CLI
+    if (memcmp(command, "get ble.backhaul", 16) == 0) {
+      char macbuf[18];
+      sprintf(macbuf, "%02X:%02X:%02X:%02X:%02X:%02X",
+        _prefs.ble_peer_mac[0], _prefs.ble_peer_mac[1], _prefs.ble_peer_mac[2],
+        _prefs.ble_peer_mac[3], _prefs.ble_peer_mac[4], _prefs.ble_peer_mac[5]);
+      sprintf(reply, "> %s role=%s tx=%d mac=%s",
+        _prefs.ble_backhaul_enabled ? "on" : "off",
+        _prefs.ble_backhaul_role ? "central" : "periph",
+        (int)_prefs.ble_tx_power_dbm, macbuf);
+      return;
+    } else if (memcmp(command, "set ble.backhaul ", 17) == 0) {
+      const char* args = &command[17];
+      if (memcmp(args, "on", 2) == 0) {
+        _prefs.ble_backhaul_enabled = 1;
+      } else if (memcmp(args, "off", 3) == 0) {
+        _prefs.ble_backhaul_enabled = 0;
+      } else if (memcmp(args, "role ", 5) == 0) {
+        const char* role = &args[5];
+        if (memcmp(role, "central", 7) == 0 || role[0] == '1') _prefs.ble_backhaul_role = 1;
+        else _prefs.ble_backhaul_role = 0;
+      } else if (memcmp(args, "tx ", 3) == 0) {
+        _prefs.ble_tx_power_dbm = (int8_t) atoi(&args[3]);
+      } else if (memcmp(args, "peer ", 5) == 0) {
+        // parse MAC AA:BB:CC:DD:EE:FF
+        uint8_t mac[6]; int mi = 0; uint8_t val = 0; int nyb = 0;
+        const char* p = &args[5];
+        while (*p && mi < 6) {
+          char c = *p++;
+          if (c == ':' || c == '-') {
+            if (nyb == 1) { mi = 0; break; }
+            continue;
+          }
+          uint8_t hv;
+          if (c >= '0' && c <= '9') hv = c - '0';
+          else if (c >= 'A' && c <= 'F') hv = 10 + (c - 'A');
+          else if (c >= 'a' && c <= 'f') hv = 10 + (c - 'a');
+          else continue;
+          if (nyb == 0) {
+            val = hv << 4;
+            nyb = 1;
+          } else {
+            val |= hv;
+            nyb = 0;
+            mac[mi++] = val;
+            val = 0;
+          }
+        }
+        if (mi == 6 && nyb == 0) {
+          memcpy(_prefs.ble_peer_mac, mac, 6);
+        } else {
+          strcpy(reply, "ERR: bad mac"); return;
+        }
+      } else if (memcmp(args, "reconnect", 9) == 0) {
+        if (ble_bridge) ble_bridge->reconfigure();
+      } else {
+        strcpy(reply, "ERR: bad ble cmd"); return;
+      }
+      savePrefs();
+      if (ble_bridge) ble_bridge->reconfigure();
+      strcpy(reply, "OK"); return;
+    } else if (memcmp(command, "get ble.adv.interval", 20) == 0) {
+      // Print advertising min/max in milliseconds
+      uint16_t min_units = _prefs.ble_adv_itvl_min ? _prefs.ble_adv_itvl_min : 8000;
+      uint16_t max_units = _prefs.ble_adv_itvl_max ? _prefs.ble_adv_itvl_max : 16000;
+      uint32_t min_ms = (uint32_t)min_units * 5 / 8;
+      uint32_t max_ms = (uint32_t)max_units * 5 / 8;
+      sprintf(reply, "> %lu %lu", (unsigned long)min_ms, (unsigned long)max_ms);
+      return;
+    } else if (memcmp(command, "set ble.adv.interval ", 21) == 0) {
+      const char* args2 = &command[21];
+      // Expect: <min_ms> <max_ms>
+      unsigned long min_ms = 0, max_ms = 0;
+      if (sscanf(args2, "%lu %lu", &min_ms, &max_ms) < 2) { strcpy(reply, "ERR"); return; }
+      if (min_ms < 20) min_ms = 20;
+      if (max_ms < min_ms) max_ms = min_ms;
+      uint16_t min_units = (uint16_t)((min_ms * 8 + 2) / 5);
+      uint16_t max_units = (uint16_t)((max_ms * 8 + 2) / 5);
+      _prefs.ble_adv_itvl_min = min_units;
+      _prefs.ble_adv_itvl_max = max_units;
+      savePrefs();
+      if (ble_bridge) ble_bridge->reconfigure();
+      strcpy(reply, "OK"); return;
+    } else if (memcmp(command, "get ble.scan.interval", 21) == 0) {
+      // Print scanner interval/window in ms
+      uint16_t itvl_units = _prefs.ble_scan_itvl ? _prefs.ble_scan_itvl : 4800;
+      uint16_t win_units  = _prefs.ble_scan_window ? _prefs.ble_scan_window : 4800;
+      uint32_t itvl_ms = (uint32_t)itvl_units * 5 / 8;
+      uint32_t win_ms  = (uint32_t)win_units  * 5 / 8;
+      sprintf(reply, "> %lu %lu", (unsigned long)itvl_ms, (unsigned long)win_ms);
+      return;
+    } else if (memcmp(command, "set ble.scan.interval ", 22) == 0) {
+      const char* args3 = &command[22];
+      // Expect: <interval_ms> <window_ms>
+      unsigned long itvl_ms = 0, win_ms = 0;
+      if (sscanf(args3, "%lu %lu", &itvl_ms, &win_ms) < 2) { strcpy(reply, "ERR"); return; }
+      if (itvl_ms < 10) itvl_ms = 10;
+      if (win_ms > itvl_ms) win_ms = itvl_ms;
+      uint16_t itvl_units = (uint16_t)((itvl_ms * 8 + 2) / 5);
+      uint16_t win_units  = (uint16_t)((win_ms  * 8 + 2) / 5);
+      _prefs.ble_scan_itvl   = itvl_units;
+      _prefs.ble_scan_window = win_units;
+      savePrefs();
+      if (ble_bridge) ble_bridge->reconfigure();
+      strcpy(reply, "OK"); return;
+    }
+#endif
+
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 
   void loop() {
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+    if (ble_bridge && _prefs.ble_backhaul_enabled) {
+      ble_bridge->loop();
+    }
+#endif
     mesh::Mesh::loop();
 
     if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
@@ -862,6 +999,12 @@ void setup() {
   sensors.begin();
 
   the_mesh.begin(fs);
+
+#if defined(WITH_BLE_BRIDGE) && defined(NRF52_PLATFORM)
+  // Instantiate BLE NUS bridge using the shared PacketManager and RTC
+  ble_bridge = new BLENUSBridge(g_bridge_mgr, &rtc_clock, the_mesh.getNodePrefs());
+  ble_bridge->begin();
+#endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
